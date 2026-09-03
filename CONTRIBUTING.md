@@ -67,13 +67,8 @@ workflow via *Actions → Release → Run workflow* and set the `bump` input
 
 ## Repository setup (one-time, admin)
 
-Branch protection, the default branch, automatic branch deletion after merge,
-and removing `main` are applied by a helper script. They require repo-admin
-rights and the GitHub CLI (`gh`, which runs on Windows, macOS and Linux):
-
-- Windows (PowerShell): [`scripts/setup-repo.ps1`](scripts/setup-repo.ps1)
-- macOS / Linux (bash): [`scripts/setup-repo.sh`](scripts/setup-repo.sh)
-
-See each file's header for usage. Everything the scripts do can also be done
-by hand in the GitHub web UI (**Settings → Branches / Rules** and
-**Settings → General → Pull Requests**) if you prefer not to use the CLI.
+The `release` branch is protected in the GitHub repository settings: pull
+requests are required, direct/force pushes and deletion are blocked, and the
+CI `build` check must pass. Merged branches are deleted automatically. This is
+configured under **Settings → Rules → Rulesets** and **Settings → General →
+Pull Requests**; contributors don't need to do anything for it.
