@@ -13,3 +13,6 @@ obj/
 # Local secrets / scratch — never commit a bot token
 *.secret
 *.local.json
+
+# NuGet restore lock file (regenerated on build)
+packages.lock.json

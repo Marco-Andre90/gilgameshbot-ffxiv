@@ -1,0 +1,143 @@
+name: Release
+
+# Runs on every push to the release branch (i.e. after a feature/fix PR merges).
+# Computes the next SemVer version from Conventional Commits since the last tag,
+# builds the plugin stamped with that version, then creates the git tag and a
+# GitHub Release with the packaged plugin attached.
+#
+# The version is carried by the tag and the built artifact only; nothing is
+# committed back to the release branch, so this works with branch protection
+# (creating a tag is not a push to the protected branch).
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Force a specific bump (major|minor|patch). Leave blank to infer from commits.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        env:
+          FORCE_BUMP: ${{ github.event.inputs.bump }}
+        run: |
+          set -euo pipefail
+
+          # Base version from the csproj, used only for the very first release
+          # (when no tag exists yet). e.g. 0.1.0.0 -> 0.1.0
+          base_raw="$(grep -oPm1 '(?<=<Version>)[^<]+' GilgameshBot/GilgameshBot.csproj || echo '0.0.0')"
+          base="$(echo "$base_raw" | awk -F. '{printf "%d.%d.%d", $1, ($2==""?0:$2), ($3==""?0:$3)}')"
+
+          last_tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -n1 || true)"
+
+          if [ -z "$last_tag" ]; then
+            new="$base"
+            echo "No existing tag; first release will be v$new (from csproj)."
+          else
+            major="$(echo "$last_tag" | cut -d. -f1)"
+            minor="$(echo "$last_tag" | cut -d. -f2)"
+            patch="$(echo "$last_tag" | cut -d. -f3)"
+
+            range="v${last_tag}..HEAD"
+            msgs="$(git log --format=%B "$range" || true)"
+            subjects="$(git log --format=%s "$range" || true)"
+
+            if [ -z "$(git log --format=%H "$range")" ]; then
+              echo "No new commits since v$last_tag; nothing to release."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            bump="${FORCE_BUMP:-}"
+            if [ -z "$bump" ]; then
+              if echo "$msgs" | grep -qE 'BREAKING CHANGE' \
+                 || echo "$subjects" | grep -qE '^[a-zA-Z]+(\([^)]+\))?!:'; then
+                bump="major"
+              elif echo "$subjects" | grep -qE '^feat(\([^)]+\))?:'; then
+                bump="minor"
+              elif echo "$subjects" | grep -qE '^fix(\([^)]+\))?:'; then
+                bump="patch"
+              else
+                bump="patch"
+              fi
+            fi
+
+            case "$bump" in
+              major) major=$((major+1)); minor=0; patch=0 ;;
+              minor) minor=$((minor+1)); patch=0 ;;
+              patch) patch=$((patch+1)) ;;
+              *) echo "Invalid bump '$bump'"; exit 1 ;;
+            esac
+            new="${major}.${minor}.${patch}"
+            echo "Bump: $bump  ->  v$new (previous v$last_tag)."
+          fi
+
+          if git rev-parse "v$new" >/dev/null 2>&1; then
+            echo "Tag v$new already exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        if: steps.version.outputs.skip != 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Fetch Dalamud reference assemblies
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://goatcorp.github.io/dalamud-distrib/latest.zip -o /tmp/dalamud.zip
+          mkdir -p "$HOME/dalamud"
+          unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
+          echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
+
+      - name: Build (Release, stamped)
+        if: steps.version.outputs.skip != 'true'
+        run: >
+          dotnet build GilgameshBot/GilgameshBot.csproj
+          -c Release
+          -p:EnableWindowsTargeting=true
+          -p:Version=${{ steps.version.outputs.version }}.0
+
+      - name: Stage release asset
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          cp "GilgameshBot/bin/Release/GilgameshBot/latest.zip" \
+             "GilgameshBot-${{ steps.version.outputs.tag }}.zip"
+
+      - name: Create tag and GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${{ steps.version.outputs.tag }}"
+          --target "${{ github.sha }}"
+          --title "GilgameshBot ${{ steps.version.outputs.version }}"
+          --generate-notes
+          "GilgameshBot-${{ steps.version.outputs.tag }}.zip"

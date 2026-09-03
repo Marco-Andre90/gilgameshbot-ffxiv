@@ -1,0 +1,49 @@
+name: CI
+
+# Validates every pull request into release and any direct push to release.
+# The job name below ("build") is the status-check context that the release
+# branch protection requires — keep them in sync (see scripts/setup-repo.sh).
+
+on:
+  pull_request:
+    branches: [release]
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Fetch Dalamud reference assemblies
+        run: |
+          set -euo pipefail
+          curl -fsSL https://goatcorp.github.io/dalamud-distrib/latest.zip -o /tmp/dalamud.zip
+          mkdir -p "$HOME/dalamud"
+          unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
+          echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
+
+      - name: Build (Release)
+        run: >
+          dotnet build GilgameshBot/GilgameshBot.csproj
+          -c Release
+          -p:EnableWindowsTargeting=true
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: GilgameshBot-plugin
+          path: GilgameshBot/bin/Release/GilgameshBot/latest.zip
+          if-no-files-found: error
