@@ -1,0 +1,57 @@
+# GilgameshBot — notes for Claude Code
+
+Dalamud (FFXIV) plugin that relays Free Company chat to Discord. Read `README.md` for what the current phase does and `docs/ROADMAP.md` for the phases and the decision log before changing behaviour.
+
+## Stack
+
+- C# / .NET 10, `Dalamud.NET.Sdk/15.0.0` (Dalamud API 15, game patch 7.5+). The SDK sets the target framework (`net10.0-windows`), x64, unsafe blocks and the Dalamud references; do not add them to the csproj by hand.
+- Discord.Net 3.20.1 (`Discord.Net.WebSocket`) for the gateway + REST.
+- Dalamud reference assemblies come from `%AppData%\XIVLauncher\addon\Hooks\dev\` or `DALAMUD_HOME`.
+
+## Build / run
+
+```powershell
+dotnet build GilgameshBot/GilgameshBot.csproj -c Release
+```
+
+Load as a dev plugin (`/xlsettings` → Experimental → Dev Plugin Locations). Logs: `/xllog` in game, or `%AppData%\XIVLauncher\dalamud.log`.
+
+## Layout
+
+```
+GilgameshBot/
+  Plugin.cs                     entry point, login/logout wiring, /gilgamesh command
+  Configuration.cs              persisted settings (token, IDs, toggles)
+  Chat/FreeCompanyChatListener  IChatGui.ChatMessage → filter FreeCompany → enqueue
+  Chat/OutboundMessage          record passed from game thread to Discord worker
+  Relay/DiscordBridge           gateway lifecycle, Online/Offline, outbound queue + worker
+  Relay/MentionResolver         @name → <@id> / <@&id> via guild member search; returns the allow-list of IDs
+  Relay/MessageFormatter        markdown escaping, mass-mention neutralising, 2000-char cap
+  GilgameshBot.json             plugin manifest (mirrors the csproj properties)
+  Windows/ConfigWindow          ImGui settings + status
+docs/ROADMAP.md                 phases 1–4, decisions, open questions
+```
+
+## Rules of the road
+
+- **Phase discipline.** We are in Phase 1 (FFXIV → Discord, one FC, one officer). Do not start Phase 2+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
+- **Game thread never blocks.** `IChatGui.ChatMessage` runs on the game's main thread: extract + enqueue only. All Discord I/O lives on background tasks in `DiscordBridge`.
+- **Never log or print the bot token.**
+- **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.
+- **`Disconnect()` is fire-and-forget.** Only `Dispose()` waits (bounded) so the Offline notice gets out during unload.
+- **Docs split:** README describes the present (setup/run for the shipped phase); the future goes in `docs/ROADMAP.md`.
+- Namespace is `GilgameshBot.Relay`, not `GilgameshBot.Discord`, to avoid clashing with the `Discord` root namespace of Discord.Net.
+
+## First build — things written without a compiler
+
+This code was written against Dalamud API 15 documentation without compiling. Likely spots to fix on the first `dotnet build`:
+
+1. `IChatGui.ChatMessage` handler signature: expects `OnHandleableChatMessageDelegate(IHandleableChatMessage message)` with `message.LogKind`, `message.Sender`, `message.Message` (API 15 replaced the old `(XivChatType, int, ref SeString, ref SeString, ref bool)` form).
+2. `IClientState.Login` (`Action`) and `IClientState.Logout` (`Action<int, int>`) event signatures.
+3. `IPlayerState.HomeWorld.ValueNullable?.Name.ExtractText()` — Lumina `RowRef<World>` / `ReadOnlySeString` API.
+4. `Dalamud.Bindings.ImGui` overloads in `ConfigWindow`: `InputText(label, ref string, int maxLength, ImGuiInputTextFlags)`, `InputInt(label, ref int, step, stepFast)`.
+5. `IPluginLog.Error(Exception?, string, params object[])` overload resolution when the exception may be null.
+6. Discord.Net: `SocketGuild.SearchUsersAsync(string, int, RequestOptions)`, `RestGuildUser.DisplayName/GlobalName/Nickname`, `SocketRole.IsMentionable`, `AllowedMentions.None`, `AllowedMentions.UserIds/RoleIds` setters, `Discord.Net.WebSocketClosedException.CloseCode/Reason`, `RequestOptions.CancelToken`.
+7. Collection expressions (`[]`) and `record struct` need C# 12+; the SDK sets LangVersion 14.
+
+If a duplicate `Newtonsoft.Json` reference warning appears (Dalamud ships 13.0.4, Discord.Net wants ≥13.0.4), it is harmless; only set `<Use_Dalamud_Newtonsoft_Json>false</Use_Dalamud_Newtonsoft_Json>` if it turns into an error.

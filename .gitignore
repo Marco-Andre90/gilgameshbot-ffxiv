@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+
+# IDEs
+.vs/
+.idea/
+*.swp
+.DS_Store
+
+# Local secrets / scratch — never commit a bot token
+*.secret
+*.local.json

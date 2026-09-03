@@ -1,0 +1,33 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <!--
+    The Dalamud SDK sets TargetFramework (net10.0-windows), x64, AllowUnsafeBlocks,
+    the Dalamud/Lumina/FFXIVClientStructs references and the DalamudPackager step.
+    Dalamud assemblies are resolved from %AppData%\XIVLauncher\addon\Hooks\dev\ on Windows,
+    or from the folder pointed to by the DALAMUD_HOME environment variable.
+  -->
+
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+
+    <!--
+      Plugin manifest. Newer DalamudPackager versions read these properties; GilgameshBot.json
+      next to this file carries the same values for the JSON-manifest path. Keep both in sync.
+    -->
+    <Author>Marco</Author>
+    <Name>GilgameshBot</Name>
+    <Punchline>Relays your Free Company chat to a Discord channel.</Punchline>
+    <Description>GilgameshBot jumps between dimensions: while an officer running this plugin is online, Free Company chat is relayed to a Discord channel, with @mentions resolved to Discord members.</Description>
+    <RepoUrl>https://github.com/marco-innocenti-sysmanager/gilgameshbot-ffxiv</RepoUrl>
+    <Tags>discord;chat;free company;fc;bridge</Tags>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Discord gateway + REST client. Pulls in Discord.Net.Core and Discord.Net.Rest. -->
+    <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+  </ItemGroup>
+
+</Project>
