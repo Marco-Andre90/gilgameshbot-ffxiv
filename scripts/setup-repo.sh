@@ -58,6 +58,11 @@ fi
 gh api -X PATCH "repos/$REPO" -f default_branch=release >/dev/null
 echo "    default branch = release"
 
+# --- 1b. auto-delete merged branches ----------------------------------------
+echo "==> Enabling automatic deletion of head branches after merge"
+gh api -X PATCH "repos/$REPO" -F delete_branch_on_merge=true >/dev/null
+echo "    delete_branch_on_merge = true"
+
 # --- 2. branch-protection ruleset -------------------------------------------
 echo "==> Applying branch-protection ruleset to 'release'"
 
