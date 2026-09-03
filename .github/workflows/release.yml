@@ -12,6 +12,15 @@ name: Release
 on:
   push:
     branches: [release]
+    # Only impactful changes cut a release. Merges that touch just docs,
+    # scripts, CI config or markdown are skipped (a merge that also changes
+    # anything outside these paths still releases). Use "Run workflow" to
+    # force a release regardless.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/**'
   workflow_dispatch:
     inputs:
       bump:
