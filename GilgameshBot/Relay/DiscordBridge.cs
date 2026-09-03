@@ -102,6 +102,7 @@ public sealed class DiscordBridge : IDisposable
 
         s.Client.Log += OnDiscordLog;
         s.Client.Ready += () => OnReadyAsync(s);
+        s.Client.Connected += () => OnConnectedAsync(s);
         s.Client.Disconnected += ex => OnDisconnectedAsync(s, ex);
 
         s.Worker = Task.Run(() => WorkerLoopAsync(s));
@@ -221,13 +222,42 @@ public sealed class DiscordBridge : IDisposable
         log.Information("Connected to Discord as {Bot}; relaying to #{Channel} in {Guild}.",
             s.Client.CurrentUser.Username, textChannel.Name, guild.Name);
 
-        // Ready fires again after every reconnect; announce only once per session.
+        // Ready fires on a fresh identify (first connect, or a session that could not be
+        // resumed). A resumed reconnect does NOT raise Ready — see OnConnectedAsync.
+        // Announce Online only once per session.
         if (config.AnnounceOnlineOffline && !s.AnnouncedOnline)
         {
             s.AnnouncedOnline = true; // claim first so a fast reconnect can't announce twice
             _ = Task.Run(() => AnnounceOnlineAsync(s, textChannel)); // don't block the gateway task
         }
 
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Fires whenever the gateway socket (re)connects. On a resumed reconnect Discord.Net
+    /// replays the existing session and raises no public Resumed/Ready event, so this is the
+    /// only signal that the link is back. Without it the bridge would sit in
+    /// <see cref="BridgeState.Reconnecting"/> forever after Discord's periodic reconnect and
+    /// the worker would stop relaying. We only act while <see cref="BridgeState.Reconnecting"/>
+    /// (the first connect is driven by <see cref="OnReadyAsync"/>, which also resolves the
+    /// channel); the cached channel stays valid because sends are REST calls keyed by id.
+    /// </summary>
+    private Task OnConnectedAsync(Session s)
+    {
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested)
+            return Task.CompletedTask;
+
+        lock (gate)
+        {
+            if (!IsCurrent(s) || State != BridgeState.Reconnecting || s.TextChannel is null)
+                return Task.CompletedTask;
+
+            State = BridgeState.Connected;
+            LastError = null;
+        }
+
+        log.Information("Discord gateway reconnected; relaying restored.");
         return Task.CompletedTask;
     }
 
