@@ -108,7 +108,7 @@ If hosting ever becomes available, a small relay service replaces the Discord-si
 
 ## Reference projects
 
-- [reiichi001/Dalamud.DiscordBridge](https://github.com/reiichi001/Dalamud.DiscordBridge) — bidirectional bridge, Discord.Net inside a Dalamud plugin.
+- [reiichi001/Dalamud.DiscordBridge](https://github.com/reiichi001/Dalamud.DiscordBridge) — one-way FFXIV → Discord relay (its README notes it does not relay Discord → game); Discord.Net inside a Dalamud plugin. Used here only as a reference (it is AGPL-3.0; no code was copied).
 - [Valiice/DiscordChatWebhook](https://github.com/Valiice/DiscordChatWebhook) — minimal webhook relay.
 - [ViMaSter/FFXIVDiscordChatBridge](https://github.com/ViMaSter/FFXIVDiscordChatBridge) — another variation.
 - [goatcorp/SamplePlugin](https://github.com/goatcorp/SamplePlugin) — current plugin template and API usage.
