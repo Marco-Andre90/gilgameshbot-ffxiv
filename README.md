@@ -97,3 +97,11 @@ Type `@` followed by the person's Discord **username** (the lowercase handle, no
 ## A word on third-party tools
 
 Square Enix's terms of service do not allow third-party tools. Dalamud plugins are widely used and tolerated in practice, but the risk is carried by the account running them. Keep the usual etiquette: don't mention plugins in game or on official channels.
+
+## License
+
+Copyright (C) 2026 Marco André Innocenti
+
+GilgameshBot is free software, licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-only)** — see [`LICENSE`](LICENSE) for the full text. In short: you may use, study, modify and redistribute it, but any modified version you distribute *or make available to users over a network* must also be offered under the AGPL-3.0 with its source (see section 13 of the license). It comes with no warranty.
+
+GilgameshBot is an independent implementation. It was informed by prior FFXIV↔Discord plugins listed in [`docs/ROADMAP.md`](docs/ROADMAP.md) as references, but does not incorporate their code.

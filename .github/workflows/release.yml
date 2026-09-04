@@ -21,6 +21,7 @@ on:
       - 'docs/**'
       - 'scripts/**'
       - '.github/**'
+      - 'LICENSE'
   workflow_dispatch:
     inputs:
       bump:
