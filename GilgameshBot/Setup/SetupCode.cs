@@ -32,8 +32,8 @@ public sealed class SetupPayload
 {
     [JsonPropertyName("v")] public int Version { get; set; } = 2;
     [JsonPropertyName("token")] public string Token { get; set; } = string.Empty;
-    [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 30;
-    [JsonPropertyName("stale")] public int Stale { get; set; } = 90;
+    [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 10;
+    [JsonPropertyName("stale")] public int Stale { get; set; } = 20;
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
 }
 

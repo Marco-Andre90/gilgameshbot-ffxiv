@@ -11,7 +11,7 @@ One bot serves any number of Free Company branches (one per home world + Free Co
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** when the last officer stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
 - **One setup code configures everybody else.** The officer who created the bot exports a single string carrying the token and *every* branch; every other officer imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
-- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 90 seconds if the relaying officer's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
+- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 20 seconds if the relaying officer's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
 
 ## Requirements
 
@@ -95,8 +95,8 @@ The state channel fills up with one short message per running plugin (`🎮 Char
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |
 | Free Company branches | at least one | Table on the Discord tab: one row per FC, with a label, the home world and Free Company name it is matched by (plus the FC tag as a label and extra check), and its own Discord server, relay channel and state channel. The plugin picks the row matching the logged-in character |
-| Heartbeat (s) | 30 | How often this instance refreshes its presence message. Clamped to 10–120 |
-| Stale after (s) | 90 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
+| Heartbeat (s) | 10 | How often this instance refreshes its presence message. Clamped to 10–120 |
+| Stale after (s) | 20 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
 
 ## Mentions from the game
 
