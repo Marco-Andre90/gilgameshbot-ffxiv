@@ -46,9 +46,8 @@ An officer in your FC has already set the bot up and sent you one long line of t
 
 1. Copy the code.
 2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`).
-3. Click **Connect**.
 
-That's it — token, server and both channels are filled in for you. The other options (auto-connect, whether your own lines are relayed, …) stay personal to you.
+That's it — the plugin connects right away, and token, server and both channels are filled in for you. The other options (auto-connect, whether your own lines are relayed, …) stay personal to you.
 
 ### Setting up the bot for your FC (once)
 

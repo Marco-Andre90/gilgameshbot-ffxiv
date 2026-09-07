@@ -232,10 +232,21 @@ public sealed class ConfigWindow : Window, IDisposable
             RefreshBuffersFromConfig();
             setupCodeBuffer = string.Empty;
             validationMessage = null;
-            setupMessage = plugin.Bridge.State == BridgeState.Disconnected
-                ? "Imported. Connect to apply."
-                : "Imported. Reconnect to apply.";
-            setupMessageIsWarning = false;
+            // Plug & play: a freshly configured plugin connects straight away. An already
+            // running session keeps its old settings until the officer reconnects.
+            if (plugin.Bridge.State == BridgeState.Disconnected)
+            {
+                plugin.Bridge.Connect();
+                setupMessage = plugin.Bridge.State == BridgeState.Disconnected
+                    ? $"Imported, but could not connect: {plugin.Bridge.LastError}"
+                    : "Imported. Connecting to Discord…";
+                setupMessageIsWarning = plugin.Bridge.State == BridgeState.Disconnected;
+            }
+            else
+            {
+                setupMessage = "Imported. Reconnect to apply.";
+                setupMessageIsWarning = false;
+            }
         }
         else
         {
