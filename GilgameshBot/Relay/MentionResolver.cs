@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using Discord;
+using Discord.Rest;
 using Discord.WebSocket;
 
 namespace GilgameshBot.Relay;
@@ -26,10 +27,13 @@ public sealed record ResolvedText(string Text, IReadOnlyList<ulong> UserIds, IRe
 /// </summary>
 /// <remarks>
 /// Works on the <em>raw</em> game text: segments between mentions are markdown-escaped, mention
-/// tokens are replaced by <c>&lt;@id&gt;</c> / <c>&lt;@&amp;id&gt;</c>. A token resolves to a
-/// mentionable role with that exact name, or a member whose username or display name matches
-/// exactly (case-insensitive). Member lookup uses the "Search Guild Members" REST endpoint,
-/// which does not need the privileged GUILD_MEMBERS intent. Successful lookups are cached briefly.
+/// tokens are replaced by <c>&lt;@id&gt;</c> / <c>&lt;@&amp;id&gt;</c>. A token is the word after
+/// the <c>@</c> plus up to three following words, so multi-word names such as
+/// <c>@Justice Archon</c> work: candidates are tried from the longest to the single word, and each
+/// candidate must match a mentionable role name exactly, or a member's username / display name
+/// exactly (case-insensitive). Whatever words are not consumed stay as plain text. Member lookup
+/// uses the "Search Guild Members" REST endpoint (prefix search on the first word, one call per
+/// token), which does not need the privileged GUILD_MEMBERS intent. Lookups are cached briefly.
 /// <c>@everyone</c> and <c>@here</c> are never resolved.
 /// </remarks>
 public sealed partial class MentionResolver
@@ -49,9 +53,13 @@ public sealed partial class MentionResolver
 
     private readonly record struct Mention(string Text, ulong Id, bool IsRole);
 
-    // "@name" not preceded by a word character. Discord usernames are 2-32 chars of
-    // letters, digits, '_' and '.'; '-' is allowed for roles and display names.
-    [GeneratedRegex(@"(?<!\w)@([A-Za-z0-9_.\-]{2,32})")]
+    /// <summary>Most words a single mention may span ("@Justice Archon" is two).</summary>
+    private const int MaxWords = 4;
+
+    // "@name" not preceded by a word character, followed by up to three more space-separated
+    // words that may belong to a multi-word role or display name. Discord usernames are 2-32
+    // chars of letters, digits, '_' and '.'; '-' is allowed for roles and display names.
+    [GeneratedRegex(@"(?<!\w)@([A-Za-z0-9_.\-]{2,32}(?: [A-Za-z0-9_.\-]+){0,3})")]
     private static partial Regex MentionToken();
 
     /// <summary>Escapes <paramref name="rawText"/> for Discord and resolves its mention tokens.</summary>
@@ -70,20 +78,18 @@ public sealed partial class MentionResolver
         {
             ct.ThrowIfCancellationRequested();
 
-            // Keep trailing punctuation ("hi @marco.") out of the lookup and in the text.
-            var name = match.Groups[1].Value.TrimEnd('.', '-');
-            var tokenLength = 1 + name.Length;
-
-            if (IsMassMention(name))
+            var words = match.Groups[1].Value.Split(' ');
+            if (IsMassMention(words[0]))
                 continue;
 
-            var mention = await LookupAsync(name, ct);
-            if (mention is null)
+            var resolved = await LookupAsync(words, ct);
+            if (resolved is null)
                 continue;
 
-            sb.Append(Escape(rawText[last..match.Index])).Append(mention.Value.Text);
-            (mention.Value.IsRole ? roleIds : userIds).Add(mention.Value.Id);
-            last = match.Index + tokenLength;
+            var (mention, consumed) = resolved.Value;
+            sb.Append(Escape(rawText[last..match.Index])).Append(mention.Text);
+            (mention.IsRole ? roleIds : userIds).Add(mention.Id);
+            last = match.Index + 1 + consumed;
         }
 
         sb.Append(Escape(rawText[last..]));
@@ -97,27 +103,51 @@ public sealed partial class MentionResolver
         name.Equals("everyone", StringComparison.OrdinalIgnoreCase)
         || name.Equals("here", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<Mention?> LookupAsync(string name, CancellationToken ct)
+    /// <summary>
+    /// Tries the longest candidate first ("Justice Archon", then "Justice"), roles before members
+    /// at each length, and returns the mention plus how many characters of the token it consumed.
+    /// Member search results are fetched once per token (prefix search on the first word) and
+    /// reused for every candidate length.
+    /// </summary>
+    private async Task<(Mention Mention, int Consumed)?> LookupAsync(string[] words, CancellationToken ct)
     {
-        if (cache.TryGetValue(name, out var cached) && DateTime.UtcNow - cached.CachedAt < CacheTtl)
-            return cached.Value;
+        IReadOnlyCollection<RestGuildUser>? members = null;
 
-        try
+        for (var count = Math.Min(words.Length, MaxWords); count >= 1; count--)
         {
-            var mention = ResolveRole(name) ?? await ResolveUserAsync(name, ct);
-            cache[name] = (mention, DateTime.UtcNow); // negative results are cached too, but only on success
-            return mention;
+            // Keep trailing punctuation ("hi @marco.") out of the lookup and in the text.
+            var name = string.Join(' ', words, 0, count).TrimEnd('.', '-');
+            if (name.Length == 0)
+                continue;
+
+            if (cache.TryGetValue(name, out var cached) && DateTime.UtcNow - cached.CachedAt < CacheTtl)
+            {
+                if (cached.Value is { } hit)
+                    return (hit, name.Length);
+                continue;
+            }
+
+            try
+            {
+                members ??= await SearchMembersAsync(words[0], ct);
+                var mention = ResolveRole(name) ?? ResolveUser(members, name);
+                cache[name] = (mention, DateTime.UtcNow); // negative results are cached too, but only on success
+                if (mention is { } found)
+                    return (found, name.Length);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Transient REST failure: don't poison the cache, just skip this mention.
+                log.Warning(ex, "Mention lookup failed for '{Name}'.", name);
+                return null;
+            }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Transient REST failure: don't poison the cache, just skip this mention.
-            log.Warning(ex, "Mention lookup failed for '{Name}'.", name);
-            return null;
-        }
+
+        return null;
     }
 
     private Mention? ResolveRole(string name)
@@ -129,11 +159,16 @@ public sealed partial class MentionResolver
         return role is null ? null : new Mention(role.Mention, role.Id, IsRole: true);
     }
 
-    private async Task<Mention?> ResolveUserAsync(string name, CancellationToken ct)
-    {
-        // Prefix search on username and nickname; we then require an exact match.
-        var results = await guild.SearchUsersAsync(name, limit: 20, options: new RequestOptions { CancelToken = ct });
+    /// <summary>
+    /// Prefix search on username and nickname. A multi-word nickname ("Justice Archon") starts
+    /// with its first word, so one search per token covers every candidate length.
+    /// </summary>
+    private async Task<IReadOnlyCollection<RestGuildUser>> SearchMembersAsync(string firstWord, CancellationToken ct) =>
+        await guild.SearchUsersAsync(firstWord, limit: 50, options: new RequestOptions { CancelToken = ct });
 
+    private static Mention? ResolveUser(IReadOnlyCollection<RestGuildUser> results, string name)
+    {
+        // Exact match only, username first.
         var user = results.FirstOrDefault(u => string.Equals(u.Username, name, StringComparison.OrdinalIgnoreCase))
                    ?? results.FirstOrDefault(u =>
                        string.Equals(u.Nickname, name, StringComparison.OrdinalIgnoreCase)
