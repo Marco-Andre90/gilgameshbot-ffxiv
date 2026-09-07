@@ -258,7 +258,7 @@ public sealed class DiscordBridge : IDisposable
             if (s.Coordinator is null)
             {
                 var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, characterLabelProvider);
-                coordinator.LeadershipChanged += leader => OnLeadershipChanged(s, leader);
+                coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
             }
@@ -335,7 +335,7 @@ public sealed class DiscordBridge : IDisposable
     /// Announces Online when this instance becomes the relaying one - first login, clean handoff
     /// or takeover after a crash all arrive here. Followers never announce.
     /// </summary>
-    private void OnLeadershipChanged(Session s, bool leader)
+    private void OnLeadershipChanged(Session s, bool leader, bool reclaim)
     {
         if (!leader || !IsCurrent(s) || s.Cts.IsCancellationRequested)
             return;
@@ -343,6 +343,11 @@ public sealed class DiscordBridge : IDisposable
         log.Information("This instance is now relaying Free Company chat.");
 
         if (!config.AnnounceOnlineOffline || s.TextChannel is not { } channel)
+            return;
+
+        // A forfeit + re-post with nobody else leading in between is not a change of relaying
+        // officer as far as the channel is concerned: don't announce Online on every blip.
+        if (reclaim && s.AnnouncedOnline)
             return;
 
         s.AnnouncedOnline = true; // claim first, so a retry cannot announce twice

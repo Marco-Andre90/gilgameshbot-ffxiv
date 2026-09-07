@@ -60,6 +60,12 @@ public sealed class PresenceCoordinator
     private long lastHeartbeatOkTicks;
     private DateTimeOffset lastServerNow;
 
+    /// <summary>Every presence message id this instance has ever posted (forfeits re-post under a new id).</summary>
+    private readonly HashSet<ulong> ownIds = [];
+
+    /// <summary>Leader observed at the previous refresh; tells a takeover from a reclaim of our own slot.</summary>
+    private ulong? lastLeaderId;
+
     private volatile bool isLeader;
     private volatile string? leaderLabel;
     private int queuePosition;
@@ -79,8 +85,13 @@ public sealed class PresenceCoordinator
         this.characterLabelProvider = characterLabelProvider;
     }
 
-    /// <summary>Raised on a false → true or true → false change of <see cref="IsLeader"/>.</summary>
-    public event Action<bool>? LeadershipChanged;
+    /// <summary>
+    /// Raised on a false → true or true → false change of <see cref="IsLeader"/>. The second
+    /// argument is true when we merely got our own slot back (a forfeit followed by a re-post,
+    /// with nobody else having led in between); the bridge uses it to avoid announcing Online
+    /// again on every network blip.
+    /// </summary>
+    public event Action<bool, bool>? LeadershipChanged;
 
     /// <summary>False when no state channel is configured or it could not be resolved: Phase 1 behaviour.</summary>
     public bool Enabled => stateChannel is not null;
@@ -212,6 +223,7 @@ public sealed class PresenceCoordinator
                 allowedMentions: AllowedMentions.None,
                 options: new RequestOptions { CancelToken = ct });
 
+            ownIds.Add(own.Id);
             Volatile.Write(ref lastHeartbeatOkTicks, Environment.TickCount64);
             log.Debug("Presence message posted in #{Channel}.", stateChannel.Name);
         }
@@ -317,10 +329,13 @@ public sealed class PresenceCoordinator
         }
 
         // Server time: immune to clock skew between officers' PCs. Our own message, just edited,
-        // is normally the newest.
+        // is normally the newest. Floor it with the last value we saw, so that a tick where our
+        // own post failed and only stale peers remain does not make those peers look alive.
         var serverNow = presence.Max(LastTouched);
         if (serverNow > lastServerNow)
             lastServerNow = serverNow;
+        else
+            serverNow = lastServerNow;
 
         await CleanUpAsync(presence, serverNow, ct);
 
@@ -350,6 +365,7 @@ public sealed class PresenceCoordinator
         Volatile.Write(ref alivePeers, Math.Max(0, alive.Count - (index >= 0 ? 1 : 0)));
 
         SetLeadership(ownId is not null && leader is not null && leader.Id == ownId);
+        lastLeaderId = leader?.Id;
     }
 
     /// <summary>Removes debris left behind by instances that crashed. Bot's own messages only.</summary>
@@ -382,9 +398,14 @@ public sealed class PresenceCoordinator
             return;
 
         isLeader = value;
+
+        // Reclaim: the previous leader was one of our own (forfeited) messages, so from the
+        // channel's point of view the relaying officer never changed.
+        var reclaim = value && lastLeaderId is { } previous && ownIds.Contains(previous);
+
         try
         {
-            LeadershipChanged?.Invoke(value);
+            LeadershipChanged?.Invoke(value, reclaim);
         }
         catch (Exception ex)
         {
@@ -402,10 +423,13 @@ public sealed class PresenceCoordinator
             .GetMessagesAsync(100, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
             .FlattenAsync();
 
-        var self = client.CurrentUser?.Id;
+        // Without our own user id every message would be filtered out, and an empty result is
+        // read as "our message was deleted" → re-post. Treat it as a failed fetch instead.
+        var self = client.CurrentUser?.Id
+                   ?? throw new InvalidOperationException("Bot user is not available yet.");
 
         return messages
-            .Where(m => self is not null && m.Author.Id == self
+            .Where(m => m.Author.Id == self
                         && m.Content is { } c && c.StartsWith(Prefix, StringComparison.Ordinal))
             .ToList();
     }
