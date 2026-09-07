@@ -106,8 +106,8 @@ Type `@` followed by the person's Discord **username** (the lowercase handle, no
 
 - **The setup code contains the bot token.** Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard.
 - If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every officer. The old code stops working the moment the token is reset.
-- The damage anyone with the code could do is bounded by what the bot may do: it was invited with **View Channels** and **Send Messages** only, so at worst someone posts in the relay channel and the state channel it can see. It cannot read other channels, ping everyone, kick, ban or change the server. Keep it that way — do not grant the bot extra permissions.
-- The token lives in `%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json` in plain text. Anyone with that file can act as the bot. Do not share the file; if it leaks, reset the token as above.
+- The token is also stored in the plugin's config file (`%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json`). Do not share that file; if it leaks, reset the token as above.
+- Invite the bot with **View Channels** and **Send Messages** only, and do not grant it more later.
 - The plugin never logs the token. Discord.Net's own log lines are forwarded to Dalamud's log (warnings and errors at their level, the rest at debug).
 - Everything relayed is visible to everyone who can read the Discord channel. Agree with your FC on what gets relayed, and consider making the channel private to FC members.
 
