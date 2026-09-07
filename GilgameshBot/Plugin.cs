@@ -18,11 +18,18 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandName = "/gilgamesh";
     private const string CommandAlias = "/gilga";
 
+    /// <summary>How long to keep waiting for the Free Company tag to appear after a login.</summary>
+    private static readonly TimeSpan BranchResolveWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>Gap between two attempts to read the character's world + FC tag.</summary>
+    private static readonly TimeSpan BranchResolveInterval = TimeSpan.FromSeconds(1);
+
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
@@ -32,6 +39,9 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("GilgameshBot");
     private readonly ConfigWindow configWindow;
+
+    private readonly object resolveGate = new();
+    private CancellationTokenSource? resolveCts;
 
     public Plugin()
     {
@@ -62,13 +72,15 @@ public sealed class Plugin : IDalamudPlugin
 
         // Plugin loaded (or reloaded) while already in the world.
         if (Configuration.AutoConnect && PlayerState.IsLoaded)
-            Bridge.Connect();
+            BeginBranchResolution();
 
         Log.Information("GilgameshBot loaded.");
     }
 
     public void Dispose()
     {
+        CancelBranchResolution();
+
         ClientState.Login -= OnLogin;
         ClientState.Logout -= OnLogout;
 
@@ -86,14 +98,153 @@ public sealed class Plugin : IDalamudPlugin
 
     public void ToggleConfigUi() => configWindow.Toggle();
 
+    // --- Branch resolution ------------------------------------------------------------------
+
+    /// <summary>
+    /// Reads the logged-in character's home world and Free Company tag, and connects the branch
+    /// they belong to. Started on login, on plugin load in the world, from /gilgamesh connect and
+    /// from the settings window's Connect button.
+    /// </summary>
+    /// <remarks>
+    /// The FC tag is not populated in the first frames after a login, so this retries on the
+    /// framework thread once a second for <see cref="BranchResolveWindow"/>. It also keeps
+    /// retrying while <see cref="DiscordBridge.Connect"/> is a no-op because a previous session
+    /// is still tearing down — that is exactly what happens when an officer logs straight from a
+    /// character in one branch into a character in another.
+    /// </remarks>
+    public void BeginBranchResolution()
+    {
+        CancellationToken ct;
+
+        lock (resolveGate)
+        {
+            resolveCts?.Cancel();
+            resolveCts?.Dispose();
+            resolveCts = new CancellationTokenSource();
+            ct = resolveCts.Token;
+        }
+
+        _ = Task.Run(() => ResolveAndConnectAsync(ct), ct);
+    }
+
+    private void CancelBranchResolution()
+    {
+        lock (resolveGate)
+        {
+            resolveCts?.Cancel();
+            resolveCts?.Dispose();
+            resolveCts = null;
+        }
+    }
+
+    private async Task ResolveAndConnectAsync(CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + BranchResolveWindow;
+        string? lastWorld = null;
+        string? lastTag = null;
+        var branchFound = false;
+
+        try
+        {
+            while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+            {
+                var (world, tag) = await Framework.RunOnFrameworkThread(ReadCharacterBranchKey);
+
+                if (world.Length > 0 && tag.Length > 0)
+                {
+                    lastWorld = world;
+                    lastTag = tag;
+
+                    if (Configuration.FindBranch(world, tag) is { } branch)
+                    {
+                        branchFound = true;
+
+                        // Already relaying this branch: nothing to do. A different branch means
+                        // the officer switched characters — stand down and let a later tick
+                        // connect once the teardown has finished. Connect is also a no-op while
+                        // a previous session is still tearing down, which is why this retries.
+                        if (Bridge.State != BridgeState.Disconnected)
+                        {
+                            if (ReferenceEquals(Bridge.ActiveBranch, branch))
+                                return;
+
+                            Bridge.Disconnect();
+                        }
+                        else
+                        {
+                            Bridge.ClearUnavailable();
+                            Bridge.Connect(branch);
+
+                            // Either connecting (done here) or refused with a reason already on
+                            // the bridge (bad token, incomplete branch) — retrying will not help.
+                            return;
+                        }
+                    }
+                }
+
+                await Task.Delay(BranchResolveInterval, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return; // logged out, unloaded, or superseded by a newer resolution
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Could not work out which Free Company branch to relay.");
+            return;
+        }
+
+        if (ct.IsCancellationRequested || branchFound)
+            return; // a matching branch was found; the bridge owns the outcome from here
+
+        // The window expired without a match. Say why once, on the bridge, so the status line
+        // and /gilgamesh status can both explain it.
+        var reason = lastWorld is not null && lastTag is not null
+            ? $"No branch configured for «{lastTag}» @ {lastWorld}. "
+              + "Ask the officer who set the bot up to add it."
+            : "This character is not in a Free Company, so there is nothing to relay.";
+
+        Bridge.SetUnavailable(reason);
+        Log.Warning("{Reason}", reason);
+    }
+
+    /// <summary>
+    /// Home world name + Free Company tag of the logged-in character, both trimmed and empty
+    /// when unavailable. Framework thread only: it reads game state.
+    /// </summary>
+    private static (string World, string Tag) ReadCharacterBranchKey()
+    {
+        if (!PlayerState.IsLoaded)
+            return (string.Empty, string.Empty);
+
+        var world = PlayerState.HomeWorld.ValueNullable?.Name.ExtractText() ?? string.Empty;
+
+        // The FC tag lives on the player's game object, which may not exist yet (and carries no
+        // tag at all for a character without a Free Company).
+        var tag = ObjectTable.LocalPlayer?.CompanyTag.TextValue ?? string.Empty;
+
+        return (world.Trim(), tag.Trim());
+    }
+
+    /// <summary>True when a character with a Free Company is logged in. Framework thread only.</summary>
+    public static bool TryReadBranchKey(out string world, out string tag)
+    {
+        (world, tag) = ReadCharacterBranchKey();
+        return world.Length > 0 && tag.Length > 0;
+    }
+
+    // --- Events and commands ----------------------------------------------------------------
+
     private void OnLogin()
     {
         if (Configuration.AutoConnect)
-            Bridge.Connect();
+            BeginBranchResolution();
     }
 
     private void OnLogout(int type, int code)
     {
+        CancelBranchResolution();
         Bridge.Disconnect();
     }
 
@@ -102,27 +253,29 @@ public sealed class Plugin : IDalamudPlugin
         switch (args.Trim().ToLowerInvariant())
         {
             case "connect":
-                Bridge.Connect();
-                ChatGui.Print(Bridge.State == BridgeState.Disconnected
-                        ? $"GilgameshBot: could not connect. {Bridge.LastError}"
-                        : "GilgameshBot: connecting to Discord…",
-                    "GilgameshBot");
+                BeginBranchResolution();
+                ChatGui.Print("GilgameshBot: looking for your Free Company branch…", "GilgameshBot");
                 break;
 
             case "disconnect":
+                CancelBranchResolution();
                 Bridge.Disconnect();
                 ChatGui.Print("GilgameshBot: disconnecting from Discord.", "GilgameshBot");
                 break;
 
             case "status":
+                var branch = Bridge.ActiveBranch is { } active
+                    ? $" Branch: {active.Describe()}."
+                    : string.Empty;
                 var role = Bridge.State != BridgeState.Connected
                     ? string.Empty
                     : Bridge.IsLeader
                         ? " Relaying (leader)."
                         : $" On standby (#{Bridge.QueuePosition} in queue, leader: {Bridge.LeaderLabel ?? "unknown"}).";
                 ChatGui.Print($"GilgameshBot: {Bridge.State}, {Bridge.RelayedCount} message(s) relayed this session."
+                              + branch
                               + role
-                              + (Bridge.LastError is { } err ? $" Last error: {err}" : string.Empty), "GilgameshBot");
+                              + (Bridge.LastError is { } err ? $" {err}" : string.Empty), "GilgameshBot");
                 break;
 
             case "import":

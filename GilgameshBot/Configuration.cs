@@ -3,6 +3,58 @@ using Dalamud.Configuration;
 namespace GilgameshBot;
 
 /// <summary>
+/// One Free Company branch: a Free Company on a given home world, with the Discord server and
+/// channels that mirror it. The plugin picks the branch from the logged-in character, so an
+/// officer with characters in several branches needs no extra setup.
+/// </summary>
+/// <remarks>
+/// The matching key is <see cref="World"/> + <see cref="FcTag"/>, compared trimmed and
+/// case-insensitively. Each branch must have its <em>own</em> state channel: two branches
+/// sharing one would make their leaders contend and silence one of the two Free Companies.
+/// </remarks>
+[Serializable]
+public sealed class FcBranch
+{
+    /// <summary>Human label shown in the UI, e.g. "Kraken". Free text.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Home world of the characters in this branch, e.g. "Behemoth".</summary>
+    public string World { get; set; } = string.Empty;
+
+    /// <summary>Free Company tag without the « » brackets, e.g. "KRKN".</summary>
+    public string FcTag { get; set; } = string.Empty;
+
+    /// <summary>ID of the Discord server (guild) this branch relays into.</summary>
+    public ulong GuildId { get; set; }
+
+    /// <summary>ID of the text channel that receives this branch's Free Company chat.</summary>
+    public ulong ChannelId { get; set; }
+
+    /// <summary>
+    /// Hidden/admin channel where every instance relaying this branch keeps a presence message,
+    /// so that exactly one of them relays and the others queue up. One per branch.
+    /// </summary>
+    public ulong StateChannelId { get; set; }
+
+    /// <summary>True when every field needed to connect this branch is filled in.</summary>
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(Name)
+        && !string.IsNullOrWhiteSpace(World)
+        && !string.IsNullOrWhiteSpace(FcTag)
+        && GuildId != 0
+        && ChannelId != 0
+        && StateChannelId != 0;
+
+    /// <summary>"Kraken («KRKN» @ Behemoth)", for the status line and log messages.</summary>
+    public string Describe() => $"{Name} («{FcTag}» @ {World})";
+
+    /// <summary>True when this branch is the one the given character belongs to.</summary>
+    public bool Matches(string world, string fcTag) =>
+        string.Equals(World.Trim(), world.Trim(), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(FcTag.Trim(), fcTag.Trim(), StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
 /// Plugin settings. Persisted by Dalamud as JSON in
 /// %AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json.
 /// </summary>
@@ -13,24 +65,15 @@ namespace GilgameshBot;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
 
     // --- Discord ---
 
-    /// <summary>Bot token from the Discord Developer Portal (Bot → Reset Token).</summary>
+    /// <summary>Bot token from the Discord Developer Portal (Bot → Reset Token). One bot, all branches.</summary>
     public string BotToken { get; set; } = string.Empty;
 
-    /// <summary>ID of the Discord server (guild) the bot was invited to.</summary>
-    public ulong GuildId { get; set; }
-
-    /// <summary>ID of the text channel that receives Free Company chat.</summary>
-    public ulong ChannelId { get; set; }
-
-    /// <summary>
-    /// Hidden/admin channel where every running instance keeps a presence message, so that
-    /// exactly one of them relays and the others queue up. Required; all officers use the same one.
-    /// </summary>
-    public ulong StateChannelId { get; set; }
+    /// <summary>The Free Company branches this bot serves, one per (home world, FC tag).</summary>
+    public List<FcBranch> Branches { get; set; } = [];
 
     // --- Behaviour ---
 
@@ -66,7 +109,16 @@ public sealed class Configuration : IPluginConfiguration
     public int StaleSeconds { get; set; } = 90;
 
     public bool IsDiscordConfigured =>
-        !string.IsNullOrWhiteSpace(BotToken) && GuildId != 0 && ChannelId != 0 && StateChannelId != 0;
+        !string.IsNullOrWhiteSpace(BotToken) && Branches.Any(b => b.IsComplete);
+
+    /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
+    public FcBranch? FindBranch(string world, string fcTag)
+    {
+        if (string.IsNullOrWhiteSpace(world) || string.IsNullOrWhiteSpace(fcTag))
+            return null;
+
+        return Branches.FirstOrDefault(b => b.IsComplete && b.Matches(world, fcTag));
+    }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
