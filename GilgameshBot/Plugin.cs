@@ -47,6 +47,7 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        MigrateConfiguration(Configuration);
 
         Bridge = new DiscordBridge(Configuration, Log, GetCharacterLabelOnFrameworkThread);
         ChatListener = new FreeCompanyChatListener(ChatGui, PlayerState, Configuration, Bridge, Log);
@@ -98,6 +99,22 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     public void ToggleConfigUi() => configWindow.Toggle();
+
+    /// <summary>
+    /// Brings a config saved by an older version up to date. Version 3 shortened the presence
+    /// timers to 10 s / 20 s, which shortens the takeover gap; older configs carry the previous
+    /// values, so adopt the new ones once.
+    /// </summary>
+    private static void MigrateConfiguration(Configuration config)
+    {
+        if (config.Version >= 3)
+            return;
+
+        config.HeartbeatSeconds = 10;
+        config.StaleSeconds = 20;
+        config.Version = 3;
+        config.Save();
+    }
 
     // --- Branch resolution ------------------------------------------------------------------
 

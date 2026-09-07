@@ -2,24 +2,16 @@
 
 A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free Company chat to a Discord channel**. Named after the dimension-hopping Gilgamesh: while an officer running the plugin is in the game, the FC's conversation jumps over to Discord.
 
-> **Current phase: 4 — multiple Free Company branches.**
-> One bot, any number of FC branches (one per home world + Free Company name), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of officers can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code. The roadmap and the reasoning behind the design live in [`docs/ROADMAP.md`](docs/ROADMAP.md); this README only covers what works today.
+One bot serves any number of Free Company branches (one per home world + Free Company name), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of officers can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code.
 
-## What it does today
+## What it does
 
 - While your character is logged in, the plugin connects to Discord as **GilgameshBot** and posts every Free Company chat line to the configured channel as `**Character Name**: message`.
 - **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and Free Company name and looks them up in a branch table; each branch has its own Discord server, relay channel and state channel. An officer with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** when the last officer stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
 - **One setup code configures everybody else.** The officer who created the bot exports a single string carrying the token and *every* branch; every other officer imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
-- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 90 seconds if the game crashed. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
-
-### Known limitations in this phase
-
-- After a crash (not a clean logout) there is a gap of up to ~90 seconds before the next officer takes over. This is deliberate: the crashed instance's lease has to expire before anyone else may relay, which is what makes duplicates impossible.
-- Nothing goes from Discord back into the game. That is Phase 5.
-- Branches are added by hand in the settings window; there is no `/gilgamesh branch add` command yet.
-- The bot token is stored in plain text in the plugin config file (see [Security notes](#security-notes)).
+- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 20 seconds if the relaying officer's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
 
 ## Requirements
 
@@ -103,19 +95,19 @@ The state channel fills up with one short message per running plugin (`🎮 Char
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |
 | Free Company branches | at least one | Table on the Discord tab: one row per FC, with a label, the home world and Free Company name it is matched by (plus the FC tag as a label and extra check), and its own Discord server, relay channel and state channel. The plugin picks the row matching the logged-in character |
-| Heartbeat (s) | 30 | How often this instance refreshes its presence message. Clamped to 10–120 |
-| Stale after (s) | 90 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
+| Heartbeat (s) | 10 | How often this instance refreshes its presence message. Clamped to 10–120 |
+| Stale after (s) | 20 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
 
 ## Mentions from the game
 
-Type `@` followed by the person's Discord **username** (the lowercase handle, no spaces), for example `@marco` or `@marco.andre`. Display names without spaces and mentionable role names (`@Officers`) work too; matching is exact and case-insensitive. Names with spaces or non-Latin characters cannot be matched in this phase. A raw `<@123>` typed in game is shown as text and pings nobody — only mentions the plugin resolved itself are allowed to notify.
+Type `@` followed by the person's Discord **username** (the lowercase handle, no spaces), for example `@marco` or `@marco.andre`. Display names without spaces and mentionable role names (`@Officers`) work too; matching is exact and case-insensitive. A raw `<@123>` typed in game is shown as text and pings nobody — only mentions the plugin resolved itself are allowed to notify.
 
 ## Security notes
 
 - **The setup code contains the bot token.** Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard.
 - If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every officer. The old code stops working the moment the token is reset.
-- The damage anyone with the code could do is bounded by what the bot may do: it was invited with **View Channels** and **Send Messages** only, so at worst someone posts in the relay channel and the state channel it can see. It cannot read other channels, ping everyone, kick, ban or change the server. Keep it that way — do not grant the bot extra permissions.
-- The token lives in `%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json` in plain text. Anyone with that file can act as the bot. Do not share the file; if it leaks, reset the token as above.
+- The token is also stored in the plugin's config file (`%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json`). Do not share that file; if it leaks, reset the token as above.
+- Invite the bot with **View Channels** and **Send Messages** only, and do not grant it more later.
 - The plugin never logs the token. Discord.Net's own log lines are forwarded to Dalamud's log (warnings and errors at their level, the rest at debug).
 - Everything relayed is visible to everyone who can read the Discord channel. Agree with your FC on what gets relayed, and consider making the channel private to FC members.
 
@@ -163,10 +155,10 @@ Every merge into `release` runs `.github/workflows/release.yml`, which stamps th
 
 Square Enix's terms of service do not allow third-party tools. Dalamud plugins are widely used and tolerated in practice, but the risk is carried by the account running them. Keep the usual etiquette: don't mention plugins in game or on official channels.
 
+GilgameshBot is an independent implementation. It was informed by prior FFXIV↔Discord plugins as references — [reiichi001/Dalamud.DiscordBridge](https://github.com/reiichi001/Dalamud.DiscordBridge), [Valiice/DiscordChatWebhook](https://github.com/Valiice/DiscordChatWebhook), [ViMaSter/FFXIVDiscordChatBridge](https://github.com/ViMaSter/FFXIVDiscordChatBridge) and [goatcorp/SamplePlugin](https://github.com/goatcorp/SamplePlugin) — but does not incorporate their code.
+
 ## License
 
 Copyright (C) 2026 Marco André Innocenti
 
 GilgameshBot is free software, licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-only)** — see [`LICENSE`](LICENSE) for the full text. In short: you may use, study, modify and redistribute it, but any modified version you distribute *or make available to users over a network* must also be offered under the AGPL-3.0 with its source (see section 13 of the license). It comes with no warranty.
-
-GilgameshBot is an independent implementation. It was informed by prior FFXIV↔Discord plugins listed in [`docs/ROADMAP.md`](docs/ROADMAP.md) as references, but does not incorporate their code.

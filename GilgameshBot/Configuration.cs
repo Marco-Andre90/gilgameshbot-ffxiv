@@ -96,7 +96,11 @@ public sealed class FcBranch
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 2;
+    /// <summary>
+    /// Bumped when loaded settings need adjusting on the way in; see the migration in
+    /// <see cref="Plugin"/>. Version 3 introduced the 10 s / 20 s presence timers.
+    /// </summary>
+    public int Version { get; set; } = 3;
 
     // --- Discord ---
 
@@ -130,14 +134,14 @@ public sealed class Configuration : IPluginConfiguration
     /// How often the presence message is edited to prove this instance is alive. Clamped to
     /// 10–120 s where it is used, so a hand-edited config cannot break the lease.
     /// </summary>
-    public int HeartbeatSeconds { get; set; } = 30;
+    public int HeartbeatSeconds { get; set; } = 10;
 
     /// <summary>
     /// How long a presence message may go untouched before its instance counts as gone.
     /// Clamped to at least twice <see cref="HeartbeatSeconds"/> and at most 600 s. Also the
     /// leader's own lease: it stops relaying once its heartbeat is this old.
     /// </summary>
-    public int StaleSeconds { get; set; } = 90;
+    public int StaleSeconds { get; set; } = 20;
 
     public bool IsDiscordConfigured =>
         !string.IsNullOrWhiteSpace(BotToken) && Branches.Any(b => b.IsComplete);

@@ -14,13 +14,9 @@
 
 <!-- Motivation / linked issue. -->
 
-## Phase
-
-<!-- Which roadmap phase does this belong to? (see docs/ROADMAP.md) -->
-
 ## Checklist
 
 - [ ] Branch name follows the convention (`feature/…`, `fix/…`, `chore/…`, `docs/…`)
 - [ ] `dotnet build GilgameshBot/GilgameshBot.csproj -c Release` passes
 - [ ] Security rules in `CLAUDE.md` respected (token never logged, mentions stay an allow-list, game thread never blocks)
-- [ ] Docs updated (`README.md` for the shipped phase, `docs/ROADMAP.md` for future work)
+- [ ] Docs updated (`README.md`, and `CLAUDE.md` if the architecture or the rules changed)
