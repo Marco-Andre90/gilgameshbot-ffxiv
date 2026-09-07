@@ -58,6 +58,7 @@ This code was written against Dalamud API 15 documentation without compiling. Li
 4. `Dalamud.Bindings.ImGui` overloads in `ConfigWindow`: `InputText(label, ref string, int maxLength, ImGuiInputTextFlags)`, `InputInt(label, ref int, step, stepFast)`.
 5. `IPluginLog.Error(Exception?, string, params object[])` overload resolution when the exception may be null.
 6. Discord.Net: `SocketGuild.SearchUsersAsync(string, int, RequestOptions)`, `RestGuildUser.DisplayName/GlobalName/Nickname`, `SocketRole.IsMentionable`, `AllowedMentions.None`, `AllowedMentions.UserIds/RoleIds` setters, `Discord.Net.WebSocketClosedException.CloseCode/Reason`, `RequestOptions.CancelToken`.
-7. Collection expressions (`[]`) and `record struct` need C# 12+; the SDK sets LangVersion 14.
+7. `IDalamudPluginInterface.UiBuilder` is typed `IUiBuilder`, whose icon font property is `FontIcon` (the concrete `UiBuilder` also has `IconFont`). `ImGui.SeparatorText` and `ImGui.SetItemTooltip` do not exist in `Dalamud.Bindings.ImGui`; use `ImRaii` (`Dalamud.Interface.Utility.Raii`) for scoped Begin/End pairs.
+8. Collection expressions (`[]`) and `record struct` need C# 12+; the SDK sets LangVersion 14.
 
 If a duplicate `Newtonsoft.Json` reference warning appears (Dalamud ships 13.0.4, Discord.Net wants ≥13.0.4), it is harmless; only set `<Use_Dalamud_Newtonsoft_Json>false</Use_Dalamud_Newtonsoft_Json>` if it turns into an error.
