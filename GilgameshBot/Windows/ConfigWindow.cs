@@ -23,11 +23,22 @@ public sealed class ConfigWindow : Window, IDisposable
 
     // ImGui needs mutable buffers; IDs are edited as text and parsed on save.
     private string tokenBuffer;
-    private string guildIdBuffer;
-    private string channelIdBuffer;
-    private string stateChannelIdBuffer;
     private bool showToken;
     private string? validationMessage;
+
+    // Branch table + editor. -1 means "the editor holds a new branch, not one from the list".
+    private int selectedBranch = -1;
+    private string branchNameBuffer = string.Empty;
+    private string branchWorldBuffer = string.Empty;
+    private string branchFcNameBuffer = string.Empty;
+    private string branchTagBuffer = string.Empty;
+    private string guildIdBuffer = string.Empty;
+    private string channelIdBuffer = string.Empty;
+    private string stateChannelIdBuffer = string.Empty;
+
+    // "Use my character" reads game state on the framework thread; the result lands here on a
+    // later frame. Draw itself never blocks.
+    private Task<(bool Ok, string World, string Tag, string FcName)>? characterProbe;
 
     // Setup code. The pasted code is never echoed back to the screen or the log.
     private string setupCodeBuffer = string.Empty;
@@ -44,9 +55,6 @@ public sealed class ConfigWindow : Window, IDisposable
         config = plugin.Configuration;
 
         tokenBuffer = string.Empty;
-        guildIdBuffer = string.Empty;
-        channelIdBuffer = string.Empty;
-        stateChannelIdBuffer = string.Empty;
         RefreshBuffersFromConfig();
 
         // Dalamud multiplies Size and SizeConstraints by the global scale itself,
@@ -91,6 +99,8 @@ public sealed class ConfigWindow : Window, IDisposable
                     Plugin.ChatGui.Print($"GilgameshBot: {importMsg}", "GilgameshBot");
             }
         }
+
+        ConsumeCharacterProbe();
 
         // Consumed exactly once, whether or not the tab ends up being drawn this frame.
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
@@ -186,6 +196,11 @@ public sealed class ConfigWindow : Window, IDisposable
 
         using (ImRaii.PushIndent(1))
         {
+            // Which Free Company this session is relaying. Picked from the logged-in character,
+            // never chosen by hand, so it is worth showing.
+            if (bridge.ActiveBranch is { } branch)
+                TextColoured(Grey, $"Branch: {branch.Describe()}");
+
             if (bridge.State == BridgeState.Connected)
             {
                 string role;
@@ -216,29 +231,176 @@ public sealed class ConfigWindow : Window, IDisposable
         if (bridge.State == BridgeState.Disconnected)
         {
             if (ImGui.Button("Connect", ImGuiHelpers.ScaledVector2(120, 0)))
-                bridge.Connect();
+                plugin.BeginBranchResolution();
         }
         else
         {
             if (ImGui.Button("Disconnect", ImGuiHelpers.ScaledVector2(120, 0)))
-                bridge.Disconnect();
+                plugin.Bridge.Disconnect();
         }
     }
+
+    // --- Discord tab ------------------------------------------------------------------------
 
     private void DrawDiscordSettings()
     {
         ImGuiHelpers.ScaledDummy(4);
-        SectionHeader("Discord");
 
         TextWrappedColoured(Grey,
             "Only the officer who sets the bot up needs this tab. "
             + "Everyone else imports a setup code on the Status tab.");
         ImGuiHelpers.ScaledDummy(6);
 
+        SectionHeader("Bot token");
+
         var flags = showToken ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
         ImGui.InputText("Bot token", ref tokenBuffer, 256, flags);
         ImGui.SameLine();
         ImGui.Checkbox("Show", ref showToken);
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (ImGui.Button("Save token", ImGuiHelpers.ScaledVector2(180, 0)))
+        {
+            if (string.IsNullOrWhiteSpace(tokenBuffer))
+            {
+                validationMessage = "Bot token is required.";
+            }
+            else
+            {
+                config.BotToken = tokenBuffer.Trim();
+                config.Save();
+                validationMessage = "Saved. Reconnect to apply.";
+            }
+        }
+
+        SectionGap();
+        DrawBranchTable();
+        SectionGap();
+        DrawBranchEditor();
+
+        if (validationMessage is { } msg)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextColoured(Yellow, msg);
+        }
+    }
+
+    private void DrawBranchTable()
+    {
+        SectionHeader("Free Company branches");
+
+        TextWrappedColoured(Grey,
+            "One row per Free Company. The plugin picks the row that matches the logged-in "
+            + "character's home world and Free Company name — nothing is ever chosen by hand. "
+            + "(FC tags are not unique on a world, so the name is what identifies the FC.)");
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (config.Branches.Count == 0)
+        {
+            TextColoured(Grey, "No branches yet. Fill in the editor below and click Add branch.");
+            return;
+        }
+
+        // The Remove button fires in the middle of the loop; apply it once the table is closed,
+        // so the list is never mutated while it is being drawn.
+        var removeIndex = -1;
+
+        using (var table = ImRaii.Table("##branches", 5,
+                   ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
+        {
+            if (table)
+            {
+                ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f);
+                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthStretch, 3f);
+                ImGui.TableSetupColumn("Free Company", ImGuiTableColumnFlags.WidthStretch, 4f);
+                ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthStretch, 2f);
+                ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed,
+                    ImGui.GetFrameHeight() + ImGui.GetStyle().CellPadding.X);
+                ImGui.TableHeadersRow();
+
+                for (var i = 0; i < config.Branches.Count; i++)
+                {
+                    var branch = config.Branches[i];
+                    ImGui.TableNextRow();
+
+                    ImGui.TableNextColumn();
+                    if (ImGui.Selectable($"{(branch.Name.Length > 0 ? branch.Name : "(unnamed)")}##branch{i}",
+                            selectedBranch == i,
+                            // AllowItemOverlap so the Remove button in the last column stays
+                            // clickable through the row-wide selectable.
+                            ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap))
+                        SelectBranch(i);
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(branch.World);
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(branch.FcTag.Trim().Length > 0
+                        ? $"«{branch.FcTag}» {branch.FcName}"
+                        : branch.FcName);
+
+                    ImGui.TableNextColumn();
+                    TextColoured(branch.IsComplete ? Green : Yellow, branch.IsComplete ? "complete" : "incomplete");
+
+                    ImGui.TableNextColumn();
+                    if (ImGuiComponents.IconButton($"##removeBranch{i}", FontAwesomeIcon.Trash))
+                        removeIndex = i;
+
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("Remove this branch");
+                }
+            }
+        }
+
+        if (removeIndex < 0)
+            return;
+
+        config.Branches.RemoveAt(removeIndex);
+        config.Save();
+        validationMessage = "Branch removed. Reconnect to apply.";
+
+        // Keep the editor pointing at the row the officer thinks it points at.
+        if (selectedBranch == removeIndex)
+            ClearBranchEditor();
+        else if (selectedBranch > removeIndex)
+            selectedBranch--;
+    }
+
+    private void DrawBranchEditor()
+    {
+        var isNew = selectedBranch < 0 || selectedBranch >= config.Branches.Count;
+        SectionHeader(isNew ? "New branch" : "Edit branch");
+
+        ImGui.InputText("Name", ref branchNameBuffer, 64);
+        ImGui.InputText("Home world", ref branchWorldBuffer, 64);
+        ImGui.InputText("FC name", ref branchFcNameBuffer, 64);
+        ImGui.InputText("FC tag", ref branchTagBuffer, 32);
+
+        ImGuiHelpers.ScaledDummy(2);
+        TextWrappedColoured(Grey,
+            "The home world and the full FC name are what a character is matched on. The tag is a "
+            + "label: two Free Companies on one world may share a tag, so it cannot be the key.");
+        ImGuiHelpers.ScaledDummy(4);
+
+        // Draw runs on the game thread, so IsLoaded / LocalPlayer may be read here directly;
+        // the actual Free Company read still goes through the framework thread, on click.
+        var canProbe = characterProbe is null
+                       && Plugin.PlayerState.IsLoaded
+                       && Plugin.ObjectTable.LocalPlayer is not null;
+
+        using (ImRaii.Disabled(!canProbe))
+        {
+            if (ImGui.Button("Use my character", ImGuiHelpers.ScaledVector2(160, 0)))
+                StartCharacterProbe();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Fills in Home world, FC name and FC tag from the character you are logged in as. "
+            + "Needs a character in a Free Company to be logged in.");
+
+        ImGuiHelpers.ScaledDummy(4);
 
         ImGui.InputText("Server (guild) ID", ref guildIdBuffer, 32);
         ImGui.InputText("Channel ID", ref channelIdBuffer, 32);
@@ -249,18 +411,149 @@ public sealed class ConfigWindow : Window, IDisposable
             "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
         TextWrappedColoured(Grey,
             "State channel: hidden admin channel where each running plugin keeps a presence message. "
-            + "Every officer must use the same one.");
+            + "Every officer relaying this branch must use the same one, and every branch needs its own.");
         ImGuiHelpers.ScaledDummy(4);
 
-        if (ImGui.Button("Save Discord settings", ImGuiHelpers.ScaledVector2(180, 0)))
-            SaveDiscordSettings();
+        if (ImGui.Button(isNew ? "Add branch" : "Save branch", ImGuiHelpers.ScaledVector2(180, 0)))
+            SaveBranch(isNew);
 
-        if (validationMessage is { } msg)
-        {
-            ImGui.SameLine();
-            TextColoured(Yellow, msg);
-        }
+        if (isNew)
+            return;
+
+        ImGui.SameLine();
+        if (ImGui.Button("New branch", ImGuiHelpers.ScaledVector2(140, 0)))
+            ClearBranchEditor();
     }
+
+    /// <summary>
+    /// Reads the world + Free Company name and tag off the logged-in character, on the framework
+    /// thread.
+    /// </summary>
+    private void StartCharacterProbe()
+    {
+        characterProbe = Plugin.Framework.RunOnFrameworkThread(() =>
+        {
+            var ok = Plugin.TryReadBranchKey(out var world, out var tag, out var fcName);
+            return (ok, world, tag, fcName);
+        });
+    }
+
+    /// <summary>Picks up a finished "Use my character" probe. Called once per frame.</summary>
+    private void ConsumeCharacterProbe()
+    {
+        if (characterProbe is not { IsCompleted: true } probe)
+            return;
+
+        characterProbe = null;
+
+        if (!probe.IsCompletedSuccessfully)
+        {
+            validationMessage = "Could not read your character.";
+            return;
+        }
+
+        var (ok, world, tag, fcName) = probe.Result;
+        if (!ok)
+        {
+            validationMessage = "Log in on a character that is in a Free Company first.";
+            return;
+        }
+
+        branchWorldBuffer = world;
+        branchFcNameBuffer = fcName;
+        branchTagBuffer = tag;
+
+        if (branchNameBuffer.Trim().Length == 0)
+            branchNameBuffer = tag.Length > 0 ? tag : fcName;
+
+        validationMessage = null;
+    }
+
+    private void SaveBranch(bool isNew)
+    {
+        if (string.IsNullOrWhiteSpace(branchNameBuffer))
+        {
+            validationMessage = "Name is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(branchWorldBuffer))
+        {
+            validationMessage = "Home world is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(branchFcNameBuffer))
+        {
+            validationMessage = "FC name is required.";
+            return;
+        }
+
+        if (!ulong.TryParse(guildIdBuffer.Trim(), out var guildId) || guildId == 0)
+        {
+            validationMessage = "Server ID must be a number.";
+            return;
+        }
+
+        if (!ulong.TryParse(channelIdBuffer.Trim(), out var channelId) || channelId == 0)
+        {
+            validationMessage = "Channel ID must be a number.";
+            return;
+        }
+
+        if (!ulong.TryParse(stateChannelIdBuffer.Trim(), out var stateChannelId) || stateChannelId == 0)
+        {
+            validationMessage = "State channel ID must be a number.";
+            return;
+        }
+
+        var branch = isNew ? new FcBranch() : config.Branches[selectedBranch];
+
+        branch.Name = branchNameBuffer.Trim();
+        branch.World = branchWorldBuffer.Trim();
+        branch.FcName = branchFcNameBuffer.Trim();
+        branch.FcTag = branchTagBuffer.Trim().Trim('«', '»').Trim();
+        branch.GuildId = guildId;
+        branch.ChannelId = channelId;
+        branch.StateChannelId = stateChannelId;
+
+        if (isNew)
+        {
+            config.Branches.Add(branch);
+            selectedBranch = config.Branches.Count - 1;
+        }
+
+        config.Save();
+        validationMessage = "Saved. Reconnect to apply.";
+    }
+
+    private void SelectBranch(int index)
+    {
+        selectedBranch = index;
+
+        var branch = config.Branches[index];
+        branchNameBuffer = branch.Name;
+        branchWorldBuffer = branch.World;
+        branchFcNameBuffer = branch.FcName;
+        branchTagBuffer = branch.FcTag;
+        guildIdBuffer = branch.GuildId == 0 ? string.Empty : branch.GuildId.ToString();
+        channelIdBuffer = branch.ChannelId == 0 ? string.Empty : branch.ChannelId.ToString();
+        stateChannelIdBuffer = branch.StateChannelId == 0 ? string.Empty : branch.StateChannelId.ToString();
+    }
+
+    private void ClearBranchEditor()
+    {
+        selectedBranch = -1;
+        branchNameBuffer = string.Empty;
+        branchWorldBuffer = string.Empty;
+        branchFcNameBuffer = string.Empty;
+        branchTagBuffer = string.Empty;
+        guildIdBuffer = string.Empty;
+        channelIdBuffer = string.Empty;
+        stateChannelIdBuffer = string.Empty;
+    }
+
+    // --- Setup code -------------------------------------------------------------------------
 
     /// <summary>
     /// Export/import of the whole Discord configuration as one string. The code carries the bot
@@ -292,10 +585,10 @@ public sealed class ConfigWindow : Window, IDisposable
         // Outside the disabled scope, so the explanation still works while the button is greyed out.
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Copies this plugin's whole Discord configuration to the clipboard as one setup code, "
+            "Copies the bot token and every Free Company branch to the clipboard as one setup code, "
             + "for your fellow officers to import.\n\n"
             + "The code contains the bot token: send it by private message only.\n\n"
-            + "Available once the Discord tab has been filled in and saved.");
+            + "Available once the Discord tab has a token and at least one complete branch.");
 
         ImGuiHelpers.ScaledDummy(4);
 
@@ -339,15 +632,14 @@ public sealed class ConfigWindow : Window, IDisposable
             RefreshBuffersFromConfig();
             setupCodeBuffer = string.Empty;
             validationMessage = null;
-            // Plug & play: a freshly configured plugin connects straight away. An already
-            // running session keeps its old settings until the officer reconnects.
+
+            // Plug & play: a freshly configured plugin looks for this character's branch straight
+            // away. An already running session keeps its old settings until the officer reconnects.
             if (plugin.Bridge.State == BridgeState.Disconnected)
             {
-                plugin.Bridge.Connect();
-                setupMessage = plugin.Bridge.State == BridgeState.Disconnected
-                    ? $"Imported, but could not connect: {plugin.Bridge.LastError}"
-                    : "Imported. Connecting to Discord…";
-                setupMessageIsWarning = plugin.Bridge.State == BridgeState.Disconnected;
+                plugin.BeginBranchResolution();
+                setupMessage = "Imported. Looking for your Free Company branch…";
+                setupMessageIsWarning = false;
             }
             else
             {
@@ -366,43 +658,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private void RefreshBuffersFromConfig()
     {
         tokenBuffer = config.BotToken;
-        guildIdBuffer = config.GuildId == 0 ? string.Empty : config.GuildId.ToString();
-        channelIdBuffer = config.ChannelId == 0 ? string.Empty : config.ChannelId.ToString();
-        stateChannelIdBuffer = config.StateChannelId == 0 ? string.Empty : config.StateChannelId.ToString();
-    }
-
-    private void SaveDiscordSettings()
-    {
-        if (!ulong.TryParse(guildIdBuffer.Trim(), out var guildId) || guildId == 0)
-        {
-            validationMessage = "Server ID must be a number.";
-            return;
-        }
-
-        if (!ulong.TryParse(channelIdBuffer.Trim(), out var channelId) || channelId == 0)
-        {
-            validationMessage = "Channel ID must be a number.";
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(tokenBuffer))
-        {
-            validationMessage = "Bot token is required.";
-            return;
-        }
-
-        if (!ulong.TryParse(stateChannelIdBuffer.Trim(), out var stateChannelId) || stateChannelId == 0)
-        {
-            validationMessage = "State channel ID must be a number.";
-            return;
-        }
-
-        config.BotToken = tokenBuffer.Trim();
-        config.GuildId = guildId;
-        config.ChannelId = channelId;
-        config.StateChannelId = stateChannelId;
-        config.Save();
-        validationMessage = "Saved. Reconnect to apply.";
+        ClearBranchEditor();
     }
 
     private void DrawBehaviourSettings()

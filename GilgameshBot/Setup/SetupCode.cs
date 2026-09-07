@@ -1,9 +1,25 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace GilgameshBot.Setup;
+
+/// <summary>One Free Company branch inside a setup code. IDs travel as strings.</summary>
+public sealed class SetupBranch
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("world")] public string World { get; set; } = string.Empty;
+    [JsonPropertyName("fcName")] public string FcName { get; set; } = string.Empty;
+    [JsonPropertyName("tag")] public string Tag { get; set; } = string.Empty;
+    [JsonPropertyName("guild")] public string Guild { get; set; } = string.Empty;
+    [JsonPropertyName("channel")] public string Channel { get; set; } = string.Empty;
+    [JsonPropertyName("state")] public string State { get; set; } = string.Empty;
+
+    // Parsed IDs, filled in by TryDecode once validated.
+    [JsonIgnore] public ulong GuildId { get; set; }
+    [JsonIgnore] public ulong ChannelId { get; set; }
+    [JsonIgnore] public ulong StateChannelId { get; set; }
+}
 
 /// <summary>
 /// The shareable half of the configuration, carried between officers as one opaque string.
@@ -14,18 +30,11 @@ namespace GilgameshBot.Setup;
 /// </remarks>
 public sealed class SetupPayload
 {
-    [JsonPropertyName("v")] public int Version { get; set; } = 1;
+    [JsonPropertyName("v")] public int Version { get; set; } = 2;
     [JsonPropertyName("token")] public string Token { get; set; } = string.Empty;
-    [JsonPropertyName("guild")] public string Guild { get; set; } = string.Empty;
-    [JsonPropertyName("channel")] public string Channel { get; set; } = string.Empty;
-    [JsonPropertyName("state")] public string State { get; set; } = string.Empty;
     [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 30;
     [JsonPropertyName("stale")] public int Stale { get; set; } = 90;
-
-    // Parsed IDs, filled in by TryDecode once validated.
-    [JsonIgnore] public ulong GuildId { get; set; }
-    [JsonIgnore] public ulong ChannelId { get; set; }
-    [JsonIgnore] public ulong StateChannelId { get; set; }
+    [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
 }
 
 /// <summary>
@@ -33,13 +42,19 @@ public sealed class SetupPayload
 /// Free Company can be configured by pasting it, without hunting for IDs.
 /// </summary>
 /// <remarks>
-/// Format: <c>GB1:</c> + base64url(UTF-8 JSON). This is encoding, not encryption — the code is
+/// Format: <c>GB2:</c> + base64url(UTF-8 JSON). This is encoding, not encryption — the code is
 /// as sensitive as the token inside it and must only be shared by private message.
 /// </remarks>
 public static class SetupCode
 {
     /// <summary>Marker + format version. Case-sensitive; a future format bumps the digit.</summary>
-    public const string Prefix = "GB1:";
+    public const string Prefix = "GB2:";
+
+    /// <summary>Current payload version. Bumped together with <see cref="Prefix"/>.</summary>
+    private const int CurrentVersion = 2;
+
+    /// <summary>Said for every malformed code: it must never quote any part of the input.</summary>
+    private const string DamagedMessage = "The setup code is damaged or incomplete.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -54,13 +69,23 @@ public static class SetupCode
 
         var payload = new SetupPayload
         {
-            Version = 1,
+            Version = CurrentVersion,
             Token = config.BotToken,
-            Guild = config.GuildId.ToString(),
-            Channel = config.ChannelId.ToString(),
-            State = config.StateChannelId.ToString(),
             Heartbeat = heartbeat,
             Stale = Math.Clamp(config.StaleSeconds, heartbeat * 2, 600),
+            Branches = config.Branches
+                .Where(b => b.IsComplete)
+                .Select(b => new SetupBranch
+                {
+                    Name = b.Name.Trim(),
+                    World = b.World.Trim(),
+                    FcName = b.FcName.Trim(),
+                    Tag = b.FcTag.Trim(),
+                    Guild = b.GuildId.ToString(),
+                    Channel = b.ChannelId.ToString(),
+                    State = b.StateChannelId.ToString(),
+                })
+                .ToList(),
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -98,19 +123,20 @@ public static class SetupCode
         catch (Exception)
         {
             // Deliberately swallowed: the exception message can quote the payload.
-            error = "The setup code is damaged or incomplete.";
+            error = DamagedMessage;
             return false;
         }
 
         if (parsed is null)
         {
-            error = "The setup code is damaged or incomplete.";
+            error = DamagedMessage;
             return false;
         }
 
-        if (parsed.Version != 1)
+        if (parsed.Version != CurrentVersion)
         {
-            error = "This setup code was made by a newer version of GilgameshBot. Update the plugin.";
+            error = "This setup code was made by a different version of GilgameshBot. Update the plugin, "
+                    + "or ask for a code exported by the version you have.";
             return false;
         }
 
@@ -120,28 +146,42 @@ public static class SetupCode
             return false;
         }
 
-        if (!ulong.TryParse(parsed.Guild, out var guildId) || guildId == 0)
+        if (parsed.Branches is not { Count: > 0 })
         {
-            error = "The setup code has no valid server ID in it.";
+            error = "The setup code has no Free Company branches in it.";
             return false;
         }
 
-        if (!ulong.TryParse(parsed.Channel, out var channelId) || channelId == 0)
+        foreach (var branch in parsed.Branches)
         {
-            error = "The setup code has no valid channel ID in it.";
-            return false;
-        }
+            // Every message here is fixed text: branch names, worlds, Free Company names and
+            // tags come from the pasted input and must never be echoed back.
+            if (string.IsNullOrWhiteSpace(branch.Name)
+                || string.IsNullOrWhiteSpace(branch.World)
+                || string.IsNullOrWhiteSpace(branch.FcName))
+            {
+                error = "One of the Free Company branches in the setup code is incomplete.";
+                return false;
+            }
 
-        if (!ulong.TryParse(parsed.State, out var stateChannelId) || stateChannelId == 0)
-        {
-            error = "The setup code has no valid state channel ID in it.";
-            return false;
+            if (!ulong.TryParse(branch.Guild, out var guildId) || guildId == 0
+                || !ulong.TryParse(branch.Channel, out var channelId) || channelId == 0
+                || !ulong.TryParse(branch.State, out var stateChannelId) || stateChannelId == 0)
+            {
+                error = "One of the Free Company branches in the setup code has no valid Discord IDs.";
+                return false;
+            }
+
+            branch.Name = branch.Name.Trim();
+            branch.World = branch.World.Trim();
+            branch.FcName = branch.FcName.Trim();
+            branch.Tag = branch.Tag.Trim();
+            branch.GuildId = guildId;
+            branch.ChannelId = channelId;
+            branch.StateChannelId = stateChannelId;
         }
 
         parsed.Token = parsed.Token.Trim();
-        parsed.GuildId = guildId;
-        parsed.ChannelId = channelId;
-        parsed.StateChannelId = stateChannelId;
 
         // Same clamps as the settings window, applied in the same order: the heartbeat first,
         // because the lower bound of the stale window is twice the *clamped* heartbeat.
@@ -152,13 +192,25 @@ public static class SetupCode
         return true;
     }
 
-    /// <summary>Writes the shareable settings into the config and persists it.</summary>
+    /// <summary>
+    /// Writes the shareable settings into the config and persists it. The branch list is
+    /// replaced wholesale: the exporting officer's table is the source of truth.
+    /// </summary>
     public static void Apply(SetupPayload payload, Configuration config)
     {
         config.BotToken = payload.Token;
-        config.GuildId = payload.GuildId;
-        config.ChannelId = payload.ChannelId;
-        config.StateChannelId = payload.StateChannelId;
+        config.Branches = (payload.Branches ?? [])
+            .Select(b => new FcBranch
+            {
+                Name = b.Name,
+                World = b.World,
+                FcName = b.FcName,
+                FcTag = b.Tag,
+                GuildId = b.GuildId,
+                ChannelId = b.ChannelId,
+                StateChannelId = b.StateChannelId,
+            })
+            .ToList();
         config.HeartbeatSeconds = payload.Heartbeat;
         config.StaleSeconds = payload.Stale;
         config.Save();

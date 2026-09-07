@@ -23,14 +23,14 @@ Users do not build: they add the custom plugin repository `https://github.com/Ma
 ```
 GilgameshBot/
   Plugin.cs                     entry point, login/logout wiring, /gilgamesh command
-  Configuration.cs              persisted settings (token, IDs, toggles)
+  Configuration.cs              persisted settings (token, branch table, toggles) + FcBranch
   Chat/FreeCompanyChatListener  IChatGui.ChatMessage → filter FreeCompany → enqueue
   Chat/OutboundMessage          record passed from game thread to Discord worker
   Relay/DiscordBridge           gateway lifecycle, Online/Offline, outbound queue + worker
   Relay/MentionResolver         @name → <@id> / <@&id> via guild member search; returns the allow-list of IDs
   Relay/MessageFormatter        markdown escaping, mass-mention neutralising, 2000-char cap
   Relay/PresenceCoordinator     standby queue: own presence message + heartbeat, leader = oldest alive
-  Setup/SetupCode.cs            "GB1:" setup code — encode / decode / apply the shareable settings
+  Setup/SetupCode.cs            "GB2:" setup code — encode / decode / apply token + every branch
   GilgameshBot.json             plugin manifest (mirrors the csproj properties)
   Windows/ConfigWindow          ImGui settings + status
 docs/ROADMAP.md                 phases 1–4, decisions, open questions
@@ -38,12 +38,13 @@ docs/ROADMAP.md                 phases 1–4, decisions, open questions
 
 ## Rules of the road
 
-- **Phase discipline.** We are in Phase 3 (distribution via a custom plugin repository + plug & play setup code), on top of Phase 2 (one FC, several officers: one relays, the rest queue on standby behind per-instance presence messages in a required state channel). Do not start Phase 4+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
+- **Phase discipline.** We are in Phase 4 (N Free Company branches, one per home world + FC name, each with its own Discord server/channel/state channel), on top of Phase 3 (custom plugin repository + setup code) and Phase 2 (several officers: one relays, the rest queue on standby behind per-instance presence messages in a required state channel). Do not start Phase 5+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
+- **Branch is chosen from the logged-in character** (home world + FC name), never from a manual selection. `IPlayerState.HomeWorld` + `InfoProxyFreeCompany.Instance()->NameString`, read on the framework thread; `IObjectTable.LocalPlayer.CompanyTag` is read too but the tag is only a label and a secondary check — FC tags are not unique within a world, FC names are. Both are empty for the first frames after login, so resolution retries for ~30 s and is cancelled on logout; a throwing native read must feed that retry loop, never end it. No matching branch ⇒ do not connect, and say why through `DiscordBridge.SetUnavailable`.
 - **Game thread never blocks.** `IChatGui.ChatMessage` runs on the game's main thread: extract + enqueue only. All Discord I/O lives on background tasks in `DiscordBridge`.
 - **Never log or print the bot token.**
 - **Setup code contains the token.** Only ever moves through the clipboard; never log, print or render it. Decode failures produce a fixed human message and never echo any part of the input.
 - **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.
-- **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them.
+- **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them. Leader election is scoped per branch because each branch has its own state channel — `PresenceCoordinator` just uses the channel the session hands it.
 - **`Disconnect()` is fire-and-forget.** Only `Dispose()` waits (bounded) so the Offline notice gets out during unload.
 - **Docs split:** README describes the present (setup/run for the shipped phase); the future goes in `docs/ROADMAP.md`.
 - Namespace is `GilgameshBot.Relay`, not `GilgameshBot.Discord`, to avoid clashing with the `Discord` root namespace of Discord.Net.

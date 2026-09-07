@@ -60,6 +60,9 @@ public sealed class DiscordBridge : IDisposable
 
     public string? LastError { get; private set; }
 
+    /// <summary>The branch this session is relaying, or null while disconnected.</summary>
+    public FcBranch? ActiveBranch => session?.Branch;
+
     public int RelayedCount => Volatile.Read(ref relayedCount);
 
     /// <summary>True when this instance is the one relaying.</summary>
@@ -80,8 +83,11 @@ public sealed class DiscordBridge : IDisposable
         }
     }
 
-    /// <summary>Starts the connection if not already running. Safe to call repeatedly.</summary>
-    public void Connect()
+    /// <summary>
+    /// Starts relaying <paramref name="branch"/> if no session is running. Safe to call repeatedly;
+    /// does nothing (and leaves <see cref="LastError"/> alone) while a teardown is still in flight.
+    /// </summary>
+    public void Connect(FcBranch branch)
     {
         Session s;
 
@@ -90,9 +96,16 @@ public sealed class DiscordBridge : IDisposable
             if (State != BridgeState.Disconnected)
                 return;
 
-            if (!config.IsDiscordConfigured)
+            if (string.IsNullOrWhiteSpace(config.BotToken))
             {
-                LastError = "Discord is not configured (token, server ID, channel ID and state channel ID are required).";
+                LastError = "Discord is not configured: the bot token is missing.";
+                log.Warning("{Error}", LastError);
+                return;
+            }
+
+            if (!branch.IsComplete)
+            {
+                LastError = $"Branch {branch.Describe()} is missing its server, channel or state channel ID.";
                 log.Warning("{Error}", LastError);
                 return;
             }
@@ -100,7 +113,7 @@ public sealed class DiscordBridge : IDisposable
             LastError = null;
             State = BridgeState.Connecting;
 
-            s = new Session(new DiscordSocketClient(new DiscordSocketConfig
+            s = new Session(branch, new DiscordSocketClient(new DiscordSocketConfig
             {
                 // Guilds is enough to resolve the channel and roles; no privileged intents needed.
                 GatewayIntents = GatewayIntents.Guilds,
@@ -132,6 +145,30 @@ public sealed class DiscordBridge : IDisposable
                 BeginTeardown(s, announceOffline: false);
             }
         });
+    }
+
+    /// <summary>
+    /// Records why this instance is not relaying (no branch for the logged-in character, no
+    /// character at all, …) so the status line and /gilgamesh status can explain it. Ignored
+    /// while a session is running: a live connection's own errors matter more.
+    /// </summary>
+    public void SetUnavailable(string reason)
+    {
+        lock (gate)
+        {
+            if (State == BridgeState.Disconnected)
+                LastError = reason;
+        }
+    }
+
+    /// <summary>Clears a previously recorded reason once it no longer applies.</summary>
+    public void ClearUnavailable()
+    {
+        lock (gate)
+        {
+            if (State == BridgeState.Disconnected)
+                LastError = null;
+        }
     }
 
     /// <summary>
@@ -214,17 +251,18 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested)
             return Task.CompletedTask;
 
-        var guild = s.Client.GetGuild(config.GuildId);
-        var textChannel = guild?.GetTextChannel(config.ChannelId);
-        var stateChannel = guild?.GetTextChannel(config.StateChannelId);
+        var branch = s.Branch;
+        var guild = s.Client.GetGuild(branch.GuildId);
+        var textChannel = guild?.GetTextChannel(branch.ChannelId);
+        var stateChannel = guild?.GetTextChannel(branch.StateChannelId);
 
         if (guild is null || textChannel is null || stateChannel is null)
         {
             LastError = guild is null
-                ? $"Bot is not a member of server {config.GuildId}. Invite it first."
+                ? $"Bot is not a member of server {branch.GuildId} (branch {branch.Describe()}). Invite it first."
                 : textChannel is null
-                    ? $"Channel {config.ChannelId} not found in {guild.Name}, or the bot cannot see it."
-                    : $"State channel {config.StateChannelId} not found in {guild.Name}, or the bot cannot see it.";
+                    ? $"Channel {branch.ChannelId} not found in {guild.Name}, or the bot cannot see it."
+                    : $"State channel {branch.StateChannelId} not found in {guild.Name}, or the bot cannot see it.";
             log.Error("{Error}", LastError);
             BeginTeardown(s, announceOffline: false);
             return Task.CompletedTask;
@@ -252,8 +290,8 @@ public sealed class DiscordBridge : IDisposable
             State = BridgeState.Connected;
         }
 
-        log.Information("Connected to Discord as {Bot}; relaying to #{Channel} in {Guild}.",
-            s.Client.CurrentUser.Username, textChannel.Name, guild.Name);
+        log.Information("Connected to Discord as {Bot}; relaying branch {Branch} to #{Channel} in {Guild}.",
+            s.Client.CurrentUser.Username, branch.Describe(), textChannel.Name, guild.Name);
 
         // Online is announced by OnLeadershipChanged once this instance is the one relaying.
         return Task.CompletedTask;
@@ -513,8 +551,9 @@ public sealed class DiscordBridge : IDisposable
     /// <summary>Everything that belongs to one Connect → Disconnect cycle.</summary>
     private sealed class Session
     {
-        public Session(DiscordSocketClient client)
+        public Session(FcBranch branch, DiscordSocketClient client)
         {
+            Branch = branch;
             Client = client;
             Queue = Channel.CreateBounded<OutboundMessage>(new BoundedChannelOptions(QueueCapacity)
             {
@@ -523,6 +562,7 @@ public sealed class DiscordBridge : IDisposable
             });
         }
 
+        public FcBranch Branch { get; }
         public DiscordSocketClient Client { get; }
         public Channel<OutboundMessage> Queue { get; }
         public CancellationTokenSource Cts { get; } = new();

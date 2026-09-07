@@ -66,7 +66,7 @@ Resolved questions
 - *Handoff latency vs. heartbeat cost*: 30 s heartbeat / 90 s stale. Edits are one REST call per instance per 30 s in a single channel, far below Discord's per-channel edit limits; both are configurable and clamped (heartbeat 10–120 s, stale ≥ 2× heartbeat and ≤ 600 s).
 - *A message received during a leader change*: it is dropped. The lease guarantees the outgoing leader stopped relaying before the incoming one starts, so a short gap replaces the duplicate. Buffering plus dedup on sender+text+minute was rejected as more machinery for a worse failure mode (a burst of late duplicates).
 
-### Phase 3 — Distribution and plug & play setup *(current)*
+### Phase 3 — Distribution and plug & play setup *(shipped)*
 
 Goal: an FC officer with no technical background installs the plugin from the plugin installer and is relaying within minutes, without hunting for IDs.
 
@@ -77,20 +77,24 @@ Distribution — *done*
 
 Setup
 
-- **Setup code** — *done*. The officer who configures the bot exports one string (`GB1:` + base64url of the shareable settings: token, server, relay channel, state channel, heartbeat/stale) with *Export setup code*; every other officer imports it, from a paste field or straight from the clipboard (`/gilgamesh import`). Clipboard only, no files on disk. Per-user preferences (auto-connect, own messages, …) are deliberately **not** in the code. The code contains the token, so it is never rendered, logged or printed: the README says to share it by private message and to reset the token if it leaks.
+- **Setup code** — *done* (the `GB1:` format described here was replaced by `GB2:` in Phase 4, which carries the whole branch table instead of a single channel). The officer who configures the bot exports one string (marker + base64url of the shareable settings: token, the Discord IDs, heartbeat/stale) with *Export setup code*; every other officer imports it, from a paste field or straight from the clipboard (`/gilgamesh import`). Clipboard only, no files on disk. Per-user preferences (auto-connect, own messages, …) are deliberately **not** in the code. The code contains the token, so it is never rendered, logged or printed: the README says to share it by private message and to reset the token if it leaks.
 - **Pickers instead of IDs** — *deferred*. Only the single officer who creates the bot ever types an ID; everyone else pastes a setup code. Populating dropdowns from the bot's guilds and channels means a "connected enough to browse, not yet relaying" mode in the bridge, i.e. extra state on the one code path that must stay trustworthy, to save one person one round of *Copy ID*. Not worth it for now.
 - First-run guidance in the settings window: which step is missing, what to do next, and clear errors for missing channel permissions.
 
 Rejected: importing a `.txt`/`.json` file. It needs a file dialog, leaves files containing the token on disk, and is not better than the plugin config file that Dalamud already writes.
 
-### Phase 4 — Multiple FC branches
+### Phase 4 — Multiple FC branches *(current)*
 
-Goal: one bot, one plugin, N FC branches (e.g. Kraken and Famfrit), each with its own channel.
+Goal: one bot, one plugin, N FC branches (e.g. Kraken on one world and Famfrit on another), each with its own Discord server and channels.
 
-- The plugin reads the character's **home world** and **FC tag** and looks them up in a branch table in the config: `(world, fc) → channel id, state message id`.
-- Leader election, Online/Offline and mention resolution are all scoped per branch.
-- An officer with characters in two branches needs no extra setup: the branch is picked from the logged-in character.
-- Adding a branch = adding a row to the table (later: `/gilgamesh branch add`).
+- **The branch is picked from the logged-in character, never from a manual selection.** The plugin reads the character's **home world** (`IPlayerState.HomeWorld`), **FC tag** (`IObjectTable.LocalPlayer.CompanyTag`) and **FC name + FC ID** (`InfoProxyFreeCompany.Instance()->NameString` / `->Id`, FFXIVClientStructs) on the framework thread and looks them up in a branch table in the config.
+- **Matching key: `(home world, FC name)`**, trimmed and case-insensitive. FC *tags* are not unique within a world — two Free Companies on the same world may share one — so matching on the tag could relay the wrong FC's chat; FC names are unique per world. The tag stays as a human label and as a secondary check when both the branch and the character have one. The FC ID is read and logged at Debug but deliberately not persisted or matched on: it is not something an officer can type or verify. The branch's `Name` is a free-text label for the UI only.
+- **A guild per branch.** Each row carries its own server, relay channel and state channel, so two branches may live in two different Discord servers. Sharing one state channel between branches is a configuration error: their leaders would contend and one Free Company would go unrelayed.
+- **Leader election, Online/Offline and mention resolution are scoped per branch for free**, because each branch has its own state channel and relay channel. `PresenceCoordinator` was not changed — it relays into whichever channel the session hands it.
+- **The Free Company is not populated in the first frames after a login.** Both the tag and the info proxy fill in from the zone-in packet, so resolution retries on the framework thread once a second for up to 30 s, cancelled on logout. The **tag gates the read**: `InfoProxyFreeCompany` is a UIModule singleton that survives a logout within one game session and can still hold the previous character's Free Company, while `CompanyTag` hangs off `LocalPlayer`, which only exists once the new character has loaded — so a tick with a tag is a tick where the proxy is trustworthy. A failed native read of the info proxy is swallowed and treated as "no name yet", so it feeds the retry loop instead of ending resolution. The same loop covers the character-switch case, where `Connect` is a no-op while the previous session is still tearing down.
+- **A character whose branch is not configured does not connect.** The bridge exposes a human-readable reason (`No branch configured for Kraken Company «KRKN» @ Behemoth. Ask the officer who set the bot up to add it.`), shown in the status line and by `/gilgamesh status`, and logged once.
+- **Setup code v2 (`GB2:`) carries every branch**, so one string still configures a fellow officer completely — including the branches their other characters belong to. Importing replaces the whole branch list: the exporting officer's table is the source of truth. `GB1` support was dropped outright; there are no released users to stay compatible with.
+- Adding a branch = adding a row in the settings window, with a **Use my character** button that fills the home world, FC name and FC tag from whoever is logged in (later: `/gilgamesh branch add`).
 
 ### Phase 5 — Discord → FFXIV ("Discord Lala")
 
@@ -132,6 +136,11 @@ If hosting ever becomes available, a small relay service replaces the Discord-si
 | 10 | One presence message *per instance* instead of one shared state message | Each instance only ever writes its own message, so concurrent claims cannot race; leadership becomes a pure function of the channel (oldest alive snowflake wins) instead of a claim state machine. |
 | 11 | Lease: a leader stops relaying as soon as it cannot heartbeat | Guarantees the old leader is silent before a peer takes over. Trades a relay gap of up to ~StaleSeconds after a crash for never duplicating a line. |
 | 12 | Followers drop messages, never buffer them | On a clean handoff the previous leader already relayed them; replaying a backlog on promotion would duplicate exactly the lines a standby queue exists to avoid. |
+| 13 | Branch key = (home world, FC name); FC tag is a label and a secondary check | FC tags are *not* unique within a world, so `(world, tag)` can match the wrong Free Company and relay its chat into another FC's Discord. FC names are unique per world. The name costs one extra read (`InfoProxyFreeCompany`) on the same framework-thread tick, and it is what officers can read off the FC profile. Supersedes the original `(home world, FC tag)` key. |
+| 14 | One Discord server (guild) per branch, not one server with several channels | Branches are often separate communities with separate Discords; a guild per row costs one extra field and covers both shapes. |
+| 15 | The branch is chosen from the character, never from a picker | An officer with characters in two branches then needs no extra setup, and there is no "wrong branch selected" failure mode to support. |
+| 16 | Setup code v2 carries all branches and replaces the list on import | One string still configures a fellow officer completely, including branches their other characters are in; merging two tables would need identity and conflict rules for no real gain. |
+| 17 | A character with no matching branch does not connect | Relaying into another FC's channel is worse than not relaying; the reason is surfaced verbatim so the officer knows what to ask for. |
 
 ## Reference projects
 
