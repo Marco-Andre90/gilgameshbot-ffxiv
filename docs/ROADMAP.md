@@ -37,7 +37,7 @@ Known gaps (by design, addressed in Phase 2)
 - Two officers online → duplicated messages.
 - Token stored in plain text in the plugin config.
 
-### Phase 2 — Multiple officers, one FC *(current)*
+### Phase 2 — Multiple officers, one FC *(shipped)*
 
 Goal: any number of officers can run the plugin without duplicates, and Online/Offline reflects "someone is relaying" vs. "nobody is".
 
@@ -66,7 +66,24 @@ Resolved questions
 - *Handoff latency vs. heartbeat cost*: 30 s heartbeat / 90 s stale. Edits are one REST call per instance per 30 s in a single channel, far below Discord's per-channel edit limits; both are configurable and clamped (heartbeat 10–120 s, stale ≥ 2× heartbeat and ≤ 600 s).
 - *A message received during a leader change*: it is dropped. The lease guarantees the outgoing leader stopped relaying before the incoming one starts, so a short gap replaces the duplicate. Buffering plus dedup on sender+text+minute was rejected as more machinery for a worse failure mode (a burst of late duplicates).
 
-### Phase 3 — Multiple FC branches
+### Phase 3 — Distribution and plug & play setup *(current)*
+
+Goal: an FC officer with no technical background installs the plugin from the plugin installer and is relaying within minutes, without hunting for IDs.
+
+Distribution
+
+- Publish a Dalamud **custom plugin repository** (`repo.json` pluginmaster in this repo, pointing at the `latest.zip` of the GitHub Release). Officers add the repo URL once in `/xlsettings` → Experimental → Custom Plugin Repositories and install/update GilgameshBot from `/xlplugins` like any other plugin. The release workflow must regenerate `repo.json` on every release.
+- Keep the dev-plugin path documented for contributors only.
+
+Setup
+
+- **Setup code** instead of five fields: the officer who configures the bot exports one string (base64 of the shareable settings: token, server, relay channel, state channel, heartbeat/stale) with an *Export setup code* button; every other officer pastes it into an *Import setup code* field. Clipboard only, no files on disk. The code contains the token, so the README says to share it by private message and to reset the token if it leaks — the same rule as today.
+- **Pickers instead of IDs** for the first officer: after pasting the token and connecting, choose server, relay channel and state channel from dropdowns populated from the bot's guilds and channels. Developer Mode and *Copy ID* stop being required.
+- First-run guidance in the settings window: which step is missing, what to do next, and clear errors for missing channel permissions.
+
+Rejected: importing a `.txt`/`.json` file. It needs a file dialog, leaves files containing the token on disk, and is not better than the plugin config file that Dalamud already writes.
+
+### Phase 4 — Multiple FC branches
 
 Goal: one bot, one plugin, N FC branches (e.g. Kraken and Famfrit), each with its own channel.
 
@@ -75,7 +92,7 @@ Goal: one bot, one plugin, N FC branches (e.g. Kraken and Famfrit), each with it
 - An officer with characters in two branches needs no extra setup: the branch is picked from the logged-in character.
 - Adding a branch = adding a row to the table (later: `/gilgamesh branch add`).
 
-### Phase 4 — Discord → FFXIV ("Discord Lala")
+### Phase 5 — Discord → FFXIV ("Discord Lala")
 
 Goal: Discord members can talk into FC chat through a dedicated relay character.
 
@@ -109,7 +126,7 @@ If hosting ever becomes available, a small relay service replaces the Discord-si
 | 4 | Discord.Net 3.20.x | Mature, .NET 10 support, used by the existing DiscordBridge plugin without workarounds. |
 | 5 | Online/Offline messages *and* presence | Messages for humans reading the channel; presence for the crash case. |
 | 6 | Read path first, write path last | Sending chat is the fragile, ToS-sensitive part; validate everything else first. |
-| 7 | One branch at a time | Keep the POC small; branch table comes in Phase 3. |
+| 7 | One branch at a time | Keep the POC small; branch table comes in Phase 4. |
 | 8 | Markdown escaped, mass mentions blocked | Players must not be able to format or ping the whole server from game chat. |
 | 9 | Docs split: README (now) / ROADMAP (later) | Keeps setup instructions accurate for the shipped phase. |
 | 10 | One presence message *per instance* instead of one shared state message | Each instance only ever writes its own message, so concurrent claims cannot race; leadership becomes a pure function of the channel (oldest alive snowflake wins) instead of a claim state machine. |

@@ -15,8 +15,8 @@ A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free
 ### Known limitations in this phase
 
 - After a crash (not a clean logout) there is a gap of up to ~90 seconds before the next officer takes over. This is deliberate: the crashed instance's lease has to expire before anyone else may relay, which is what makes duplicates impossible.
-- One FC and one channel per configuration. Multiple FC branches (one channel each) is Phase 3.
-- Nothing goes from Discord back into the game. That is Phase 4.
+- One FC and one channel per configuration. Multiple FC branches (one channel each) is Phase 4.
+- Nothing goes from Discord back into the game. That is Phase 5.
 - The bot token is stored in plain text in the plugin config file (see [Security notes](#security-notes)).
 
 ## Requirements
