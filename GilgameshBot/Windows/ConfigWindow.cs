@@ -372,7 +372,12 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.InputText("Home world", ref branchWorldBuffer, 64);
         ImGui.InputText("FC tag", ref branchTagBuffer, 32);
 
-        var canProbe = characterProbe is null;
+        // Draw runs on the game thread, so IsLoaded / LocalPlayer may be read here directly;
+        // the actual world + tag read still goes through the framework thread, on click.
+        var canProbe = characterProbe is null
+                       && Plugin.PlayerState.IsLoaded
+                       && Plugin.ObjectTable.LocalPlayer is not null;
+
         using (ImRaii.Disabled(!canProbe))
         {
             if (ImGui.Button("Use my character", ImGuiHelpers.ScaledVector2(160, 0)))

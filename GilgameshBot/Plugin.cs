@@ -159,25 +159,32 @@ public sealed class Plugin : IDalamudPlugin
                     {
                         branchFound = true;
 
-                        // Already relaying this branch: nothing to do. A different branch means
-                        // the officer switched characters — stand down and let a later tick
-                        // connect once the teardown has finished. Connect is also a no-op while
-                        // a previous session is still tearing down, which is why this retries.
-                        if (Bridge.State != BridgeState.Disconnected)
+                        switch (Bridge.State)
                         {
-                            if (ReferenceEquals(Bridge.ActiveBranch, branch))
+                            case BridgeState.Disconnected:
+                                Bridge.ClearUnavailable();
+                                Bridge.Connect(branch);
+
+                                // Either connecting (done here) or refused with a reason already
+                                // on the bridge (bad token, incomplete branch): retrying the same
+                                // call would not change the answer.
                                 return;
 
-                            Bridge.Disconnect();
-                        }
-                        else
-                        {
-                            Bridge.ClearUnavailable();
-                            Bridge.Connect(branch);
+                            case BridgeState.Disconnecting:
+                                // The previous session is still winding down and Connect would be
+                                // a no-op. Keep ticking until it is gone. This is the ordinary
+                                // log out → log straight back in flow, same branch or not.
+                                break;
 
-                            // Either connecting (done here) or refused with a reason already on
-                            // the bridge (bad token, incomplete branch) — retrying will not help.
-                            return;
+                            default:
+                                // Live on this very branch already: nothing to do. A different
+                                // branch means the officer switched characters — stand down and
+                                // let a later tick connect the new one.
+                                if (ReferenceEquals(Bridge.ActiveBranch, branch))
+                                    return;
+
+                                Bridge.Disconnect();
+                                break;
                         }
                     }
                 }
@@ -195,8 +202,22 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        if (ct.IsCancellationRequested || branchFound)
-            return; // a matching branch was found; the bridge owns the outcome from here
+        if (ct.IsCancellationRequested)
+            return;
+
+        if (branchFound)
+        {
+            // The window expired while a previous session was still tearing down. One last try,
+            // so a very slow handoff does not leave the plugin idle with nothing to show for it.
+            if (Bridge.State == BridgeState.Disconnected
+                && Configuration.FindBranch(lastWorld!, lastTag!) is { } late)
+            {
+                Bridge.ClearUnavailable();
+                Bridge.Connect(late);
+            }
+
+            return; // the bridge owns the outcome from here
+        }
 
         // The window expired without a match. Say why once, on the bridge, so the status line
         // and /gilgamesh status can both explain it.
