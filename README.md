@@ -100,7 +100,7 @@ The state channel fills up with one short message per running plugin (`🎮 Char
 
 ## Mentions from the game
 
-Type `@` followed by the person's Discord **username** (the lowercase handle, no spaces), for example `@marco` or `@marco.andre`. Display names without spaces and mentionable role names (`@Officers`) work too; matching is exact and case-insensitive. A raw `<@123>` typed in game is shown as text and pings nobody — only mentions the plugin resolved itself are allowed to notify.
+Type `@` followed by the person's Discord **username** (the lowercase handle), for example `@marco` or `@marco.andre`. Display names and mentionable role names work too, including ones with spaces: `@Justice Archon` pings that role or member if the name matches exactly (case-insensitive). The plugin tries the longest match first, up to four words, and leaves the rest of the sentence as text. A raw `<@123>` typed in game is shown as text and pings nobody — only mentions the plugin resolved itself are allowed to notify.
 
 ## Security notes
 
