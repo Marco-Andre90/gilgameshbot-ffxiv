@@ -20,7 +20,7 @@ Use a descriptive branch name with one of these prefixes:
 | `docs/`      | documentation only                             |
 | `refactor/`  | internal changes with no behaviour change      |
 
-Example: `git switch -c feature/discord-to-game-relay`
+Example: `git switch -c fix/mention-role-matching`
 
 ## Commit / PR messages — Conventional Commits
 

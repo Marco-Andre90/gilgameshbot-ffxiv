@@ -197,7 +197,7 @@ public sealed class PresenceCoordinator
         }
         catch (Exception ex)
         {
-            // Unknown peer state: the caller falls back to posting Offline, as in Phase 1.
+            // Unknown peer state: the caller falls back to posting Offline unconditionally.
             log.Debug(ex, "Could not check for other instances on shutdown.");
             return false;
         }
