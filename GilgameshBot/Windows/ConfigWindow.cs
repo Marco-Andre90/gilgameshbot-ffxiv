@@ -139,6 +139,13 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.TextUnformatted(text);
     }
 
+    /// <summary>Explanatory prose: wraps with the window instead of at a hard-coded break.</summary>
+    private static void TextWrappedColoured(Vector4 colour, string text)
+    {
+        using (ImRaii.PushColor(ImGuiCol.Text, colour))
+            ImGui.TextWrapped(text);
+    }
+
     private void DrawStatusTab()
     {
         DrawConnection();
@@ -197,7 +204,7 @@ public sealed class ConfigWindow : Window, IDisposable
             TextColoured(Grey, $"Relayed this session: {bridge.RelayedCount} · Queued: {bridge.QueuedCount}");
 
             if (bridge.LastError is { } error)
-                TextColoured(Red, $"Last error: {error}");
+                TextWrappedColoured(Red, $"Last error: {error}");
         }
 
         ImGuiHelpers.ScaledDummy(4);
@@ -219,8 +226,9 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiHelpers.ScaledDummy(4);
         SectionHeader("Discord");
 
-        TextColoured(Grey, "Only the officer who sets the bot up needs this tab.");
-        TextColoured(Grey, "Everyone else imports a setup code on the Status tab.");
+        TextWrappedColoured(Grey,
+            "Only the officer who sets the bot up needs this tab. "
+            + "Everyone else imports a setup code on the Status tab.");
         ImGuiHelpers.ScaledDummy(6);
 
         var flags = showToken ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -233,9 +241,11 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.InputText("State channel ID", ref stateChannelIdBuffer, 32);
 
         ImGuiHelpers.ScaledDummy(4);
-        TextColoured(Grey, "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
-        TextColoured(Grey, "State channel: hidden admin channel where each running plugin keeps a presence message.");
-        TextColoured(Grey, "Every officer must use the same one.");
+        TextWrappedColoured(Grey,
+            "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
+        TextWrappedColoured(Grey,
+            "State channel: hidden admin channel where each running plugin keeps a presence message. "
+            + "Every officer must use the same one.");
         ImGuiHelpers.ScaledDummy(4);
 
         if (ImGui.Button("Save Discord settings", ImGuiHelpers.ScaledVector2(180, 0)))
@@ -256,7 +266,8 @@ public sealed class ConfigWindow : Window, IDisposable
     {
         SectionHeader("Setup code");
 
-        TextColoured(Grey, "Got a setup code from your FC? Import it here — no other Discord settings are needed.");
+        TextWrappedColoured(Grey,
+            "Got a setup code from your FC? Import it here — no other Discord settings are needed.");
         ImGuiHelpers.ScaledDummy(4);
 
         if (ImGui.Button("Import from clipboard", ImGuiHelpers.ScaledVector2(180, 0)))
@@ -295,7 +306,7 @@ public sealed class ConfigWindow : Window, IDisposable
             TryImport(setupCodeBuffer);
 
         if (setupMessage is { } setupMsg)
-            TextColoured(setupMessageIsWarning ? Yellow : Green, setupMsg);
+            TextWrappedColoured(setupMessageIsWarning ? Yellow : Green, setupMsg);
     }
 
     /// <summary>Imports the setup code in the clipboard. Draw thread only (touches ImGui).</summary>
@@ -433,8 +444,9 @@ public sealed class ConfigWindow : Window, IDisposable
     private void DrawAdvancedSettings()
     {
         ImGuiHelpers.ScaledDummy(4);
-        TextColoured(Grey, "Defaults are fine for almost everyone. Every officer should use the same");
-        TextColoured(Grey, "heartbeat and stale values (the setup code carries them).");
+        TextWrappedColoured(Grey,
+            "Defaults are fine for almost everyone. Every officer should use the same heartbeat "
+            + "and stale values (the setup code carries them).");
         ImGuiHelpers.ScaledDummy(6);
 
         SectionHeader("Timers");
@@ -462,7 +474,8 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGuiHelpers.ScaledDummy(4);
-        TextColoured(Grey, "Standby queue only: how often this instance proves it is alive,");
-        TextColoured(Grey, "and how long a silent instance keeps its place in the queue.");
+        TextWrappedColoured(Grey,
+            "Standby queue only: how often this instance proves it is alive, "
+            + "and how long a silent instance keeps its place in the queue.");
     }
 }
