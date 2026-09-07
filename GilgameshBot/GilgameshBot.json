@@ -6,5 +6,6 @@
   "Description": "GilgameshBot jumps between dimensions: while an officer running this plugin is online, Free Company chat is relayed to a Discord channel, with @mentions resolved to Discord members.",
   "ApplicableVersion": "any",
   "RepoUrl": "https://github.com/Marco-Andre90/gilgameshbot-ffxiv",
+  "IconUrl": "https://raw.githubusercontent.com/Marco-Andre90/gilgameshbot-ffxiv/release/GilgameshBot/images/icon.png",
   "Tags": ["discord", "chat", "free company", "fc", "bridge"]
 }

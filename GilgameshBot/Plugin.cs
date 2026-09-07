@@ -16,6 +16,7 @@ namespace GilgameshBot;
 public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/gilgamesh";
+    private const string CommandAlias = "/gilga";
 
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
@@ -44,7 +45,12 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status | import",
+            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status | import. Short form: /gilga",
+        });
+
+        CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "Short for /gilgamesh.",
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -71,6 +77,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleConfigUi;
 
         CommandManager.RemoveHandler(CommandName);
+        CommandManager.RemoveHandler(CommandAlias);
         WindowSystem.RemoveAllWindows();
 
         ChatListener.Dispose();

@@ -45,7 +45,7 @@ Updates arrive through the plugin installer like any other plugin — nothing to
 An officer in your FC has already set the bot up and sent you one long line of text (by private message). That is all you need:
 
 1. Copy the code.
-2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`).
+2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`, or the short form `/gilga import`).
 
 That's it — the plugin connects right away, and token, server and both channels are filled in for you. The other options (auto-connect, whether your own lines are relayed, …) stay personal to you.
 
@@ -80,6 +80,7 @@ The state channel fills up with one short message per running plugin (`🎮 Char
 | `/gilgamesh disconnect` | Post the Offline notice and disconnect |
 | `/gilgamesh status` | Print connection state, relayed-message count, and whether this instance is relaying or on standby |
 | `/gilgamesh import` | Import a setup code from the clipboard |
+| `/gilga` | Short for `/gilgamesh` — works with every subcommand above (`/gilga import`, `/gilga status`, …) |
 
 ## Options
 
@@ -142,7 +143,7 @@ Output: `GilgameshBot/bin/Release/GilgameshBot.dll`, plus `GilgameshBot/bin/Rele
 
 ### Releases
 
-Every merge into `release` runs `.github/workflows/release.yml`, which stamps the version, builds the plugin and attaches three assets to the GitHub Release: the versioned zip, `latest.zip` and `repo.json`. The custom repository URL is the `releases/latest/download/repo.json` redirect, so it always points at the newest release without anything being committed back to the protected branch. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Every merge into `release` runs `.github/workflows/release.yml`, which stamps the version, builds the plugin and attaches three assets to the GitHub Release: the versioned zip, `latest.zip` and `repo.json`. The custom repository URL is the `releases/latest/download/repo.json` redirect, so it always points at the newest release without anything being committed back to the protected branch. The icon shown in the plugin installer comes from `GilgameshBot/images/icon.png` — the build copies it next to `latest.zip` (DalamudPackager keeps images out of the zip on purpose) and `repo.json` points at it through `IconUrl`; Dalamud wants a square PNG of at most 512×512. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## A word on third-party tools
 

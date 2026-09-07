@@ -19,6 +19,7 @@
     <Punchline>Relays your Free Company chat to a Discord channel.</Punchline>
     <Description>GilgameshBot jumps between dimensions: while an officer running this plugin is online, Free Company chat is relayed to a Discord channel, with @mentions resolved to Discord members.</Description>
     <RepoUrl>https://github.com/Marco-Andre90/gilgameshbot-ffxiv</RepoUrl>
+    <IconUrl>https://raw.githubusercontent.com/Marco-Andre90/gilgameshbot-ffxiv/release/GilgameshBot/images/icon.png</IconUrl>
     <Tags>discord;chat;free company;fc;bridge</Tags>
 
     <Nullable>enable</Nullable>
@@ -28,6 +29,15 @@
   <ItemGroup>
     <!-- Discord gateway + REST client. Pulls in Discord.Net.Core and Discord.Net.Rest. -->
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Plugin installer icon (images/icon.png). Copied next to the DLL, which is where
+      DalamudPackager looks for it: it deliberately keeps images out of latest.zip and
+      copies them beside it instead. repo.json points at the same file via IconUrl.
+    -->
+    <None Include="images\**" CopyToOutputDirectory="PreserveNewest" Link="images\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

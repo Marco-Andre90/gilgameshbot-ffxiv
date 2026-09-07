@@ -159,9 +159,13 @@ jobs:
           # /xlsettings -> Experimental -> Custom Plugin Repositories.
           download="https://github.com/Marco-Andre90/gilgameshbot-ffxiv/releases/latest/download/latest.zip"
 
+          # Installer icon: served straight from the (public) release branch.
+          icon="https://raw.githubusercontent.com/Marco-Andre90/gilgameshbot-ffxiv/release/GilgameshBot/images/icon.png"
+
           jq -c \
             --arg assemblyVersion "${VERSION}.0" \
             --arg download "$download" \
+            --arg icon "$icon" \
             --arg changelog "$TAG" \
             --argjson lastUpdate "$(date +%s)" \
             '[ . + {
@@ -170,6 +174,7 @@ jobs:
                  DownloadLinkInstall: $download,
                  DownloadLinkUpdate: $download,
                  DownloadLinkTesting: $download,
+                 IconUrl: $icon,
                  IsHide: false,
                  IsTestingExclusive: false,
                  LastUpdate: $lastUpdate,
