@@ -1,5 +1,9 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
+using Dalamud.Interface.Utility;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using GilgameshBot.Relay;
 using GilgameshBot.Setup;
@@ -45,12 +49,14 @@ public sealed class ConfigWindow : Window, IDisposable
         stateChannelIdBuffer = string.Empty;
         RefreshBuffersFromConfig();
 
-        Size = new Vector2(480, 640);
+        // Dalamud multiplies Size and SizeConstraints by the global scale itself,
+        // so these are deliberately unscaled numbers.
+        Size = new Vector2(500, 600);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(420, 360),
-            MaximumSize = new Vector2(900, 900),
+            MinimumSize = new Vector2(440, 400),
+            MaximumSize = new Vector2(1000, 1200),
         };
     }
 
@@ -86,89 +92,136 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
 
-        if (!ImGui.BeginTabBar("##gilgameshTabs", ImGuiTabBarFlags.None))
-            return;
-
         // Consumed exactly once, whether or not the tab ends up being drawn this frame.
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
         selectStatusTab = false;
 
-        if (ImGui.BeginTabItem("Status", statusFlags))
+        using var tabs = ImRaii.TabBar("##gilgameshTabs");
+        if (!tabs)
+            return;
+
+        using (var statusTab = ImRaii.TabItem("Status", statusFlags))
         {
-            DrawStatus();
-            ImGui.Separator();
-            DrawSetupCode();
-            ImGui.Separator();
-            DrawBehaviourSettings();
-            ImGui.EndTabItem();
+            if (statusTab)
+                DrawStatusTab();
         }
 
-        if (ImGui.BeginTabItem("Discord", ImGuiTabItemFlags.None))
+        using (var discordTab = ImRaii.TabItem("Discord"))
         {
-            DrawDiscordSettings();
-            ImGui.EndTabItem();
+            if (discordTab)
+                DrawDiscordSettings();
         }
 
-        ImGui.EndTabBar();
+        using (var advancedTab = ImRaii.TabItem("Advanced"))
+        {
+            if (advancedTab)
+                DrawAdvancedSettings();
+        }
     }
 
-    private void DrawStatus()
+    /// <summary>
+    /// Section title + rule + a little air underneath. ImGui.SeparatorText does not exist in
+    /// Dalamud's ImGui bindings, so this is the stand-in used everywhere in this window.
+    /// </summary>
+    private static void SectionHeader(string label)
+    {
+        ImGui.TextUnformatted(label);
+        ImGui.Separator();
+        ImGuiHelpers.ScaledDummy(4);
+    }
+
+    /// <summary>Breathing room between two sections.</summary>
+    private static void SectionGap() => ImGuiHelpers.ScaledDummy(10);
+
+    private static void TextColoured(Vector4 colour, string text)
+    {
+        using (ImRaii.PushColor(ImGuiCol.Text, colour))
+            ImGui.TextUnformatted(text);
+    }
+
+    private void DrawStatusTab()
+    {
+        DrawConnection();
+        SectionGap();
+        DrawSetupCode();
+        SectionGap();
+        DrawBehaviourSettings();
+    }
+
+    private void DrawConnection()
     {
         var bridge = plugin.Bridge;
 
-        ImGui.TextUnformatted("Status:");
-        ImGui.SameLine();
+        SectionHeader("Connection");
 
-        var (color, label) = bridge.State switch
+        var (colour, label) = bridge.State switch
         {
-            BridgeState.Connected => (Green, "Connected — relaying Free Company chat"),
+            BridgeState.Connected => (Green, "Connected"),
             BridgeState.Connecting => (Yellow, "Connecting…"),
             BridgeState.Reconnecting => (Yellow, "Reconnecting…"),
             BridgeState.Disconnecting => (Yellow, "Disconnecting…"),
             _ => (Grey, "Disconnected"),
         };
-        ImGui.TextColored(color, label);
 
-        if (bridge.State == BridgeState.Connected)
+        using (ImRaii.PushColor(ImGuiCol.Text, colour))
         {
-            if (bridge.IsLeader)
-            {
-                ImGui.TextColored(Green, "Relaying (leader)");
-            }
-            else
-            {
-                var position = bridge.QueuePosition;
-                var leader = bridge.LeaderLabel ?? "unknown";
-                ImGui.TextColored(Yellow, position > 0
-                    ? $"Standby - #{position} in queue, leader: {leader}"
-                    : $"Standby - leader: {leader}");
-            }
+            // IUiBuilder calls the icon font "FontIcon"; UiBuilder's own alias is IconFont.
+            using (ImRaii.PushFont(Plugin.PluginInterface.UiBuilder.FontIcon))
+                ImGui.TextUnformatted(FontAwesomeIcon.Circle.ToIconString());
+
+            ImGui.SameLine();
+            ImGui.TextUnformatted(label);
         }
 
-        ImGui.TextUnformatted($"Relayed this session: {bridge.RelayedCount}   Queued: {bridge.QueuedCount}");
+        using (ImRaii.PushIndent(1))
+        {
+            if (bridge.State == BridgeState.Connected)
+            {
+                string role;
+                if (bridge.IsLeader)
+                {
+                    role = "Relaying Free Company chat (leader)";
+                }
+                else
+                {
+                    var position = bridge.QueuePosition;
+                    var leader = bridge.LeaderLabel ?? "unknown";
+                    role = position > 0
+                        ? $"Standby — #{position} in queue, leader: {leader}"
+                        : $"Standby — leader: {leader}";
+                }
 
-        if (bridge.LastError is { } error)
-            ImGui.TextColored(Red, $"Last error: {error}");
+                TextColoured(Grey, role);
+            }
+
+            TextColoured(Grey, $"Relayed this session: {bridge.RelayedCount} · Queued: {bridge.QueuedCount}");
+
+            if (bridge.LastError is { } error)
+                TextColoured(Red, $"Last error: {error}");
+        }
+
+        ImGuiHelpers.ScaledDummy(4);
 
         if (bridge.State == BridgeState.Disconnected)
         {
-            if (ImGui.Button("Connect"))
+            if (ImGui.Button("Connect", ImGuiHelpers.ScaledVector2(120, 0)))
                 bridge.Connect();
         }
         else
         {
-            if (ImGui.Button("Disconnect"))
+            if (ImGui.Button("Disconnect", ImGuiHelpers.ScaledVector2(120, 0)))
                 bridge.Disconnect();
         }
     }
 
     private void DrawDiscordSettings()
     {
-        ImGui.TextColored(Grey, "Only the officer who sets the bot up needs this tab.");
-        ImGui.TextColored(Grey, "Everyone else imports a setup code on the Status tab.");
-        ImGui.Spacing();
+        ImGuiHelpers.ScaledDummy(4);
+        SectionHeader("Discord");
 
-        ImGui.TextUnformatted("Discord");
+        TextColoured(Grey, "Only the officer who sets the bot up needs this tab.");
+        TextColoured(Grey, "Everyone else imports a setup code on the Status tab.");
+        ImGuiHelpers.ScaledDummy(6);
 
         var flags = showToken ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
         ImGui.InputText("Bot token", ref tokenBuffer, 256, flags);
@@ -179,17 +232,19 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.InputText("Channel ID", ref channelIdBuffer, 32);
         ImGui.InputText("State channel ID", ref stateChannelIdBuffer, 32);
 
-        ImGui.TextColored(Grey, "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
-        ImGui.TextColored(Grey, "State channel: hidden admin channel where each running plugin keeps a presence message.");
-        ImGui.TextColored(Grey, "Every officer must use the same one.");
+        ImGuiHelpers.ScaledDummy(4);
+        TextColoured(Grey, "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
+        TextColoured(Grey, "State channel: hidden admin channel where each running plugin keeps a presence message.");
+        TextColoured(Grey, "Every officer must use the same one.");
+        ImGuiHelpers.ScaledDummy(4);
 
-        if (ImGui.Button("Save Discord settings"))
+        if (ImGui.Button("Save Discord settings", ImGuiHelpers.ScaledVector2(180, 0)))
             SaveDiscordSettings();
 
         if (validationMessage is { } msg)
         {
             ImGui.SameLine();
-            ImGui.TextColored(Yellow, msg);
+            TextColoured(Yellow, msg);
         }
     }
 
@@ -199,35 +254,48 @@ public sealed class ConfigWindow : Window, IDisposable
     /// </summary>
     private void DrawSetupCode()
     {
-        ImGui.TextUnformatted("Setup code");
-        ImGui.TextColored(Grey, "Got a setup code from your FC? Import it here — no other Discord settings are needed.");
+        SectionHeader("Setup code");
 
-        var canExport = config.IsDiscordConfigured;
-        if (!canExport)
-            ImGui.BeginDisabled();
+        TextColoured(Grey, "Got a setup code from your FC? Import it here — no other Discord settings are needed.");
+        ImGuiHelpers.ScaledDummy(4);
 
-        if (ImGui.Button("Export setup code"))
-        {
-            ImGui.SetClipboardText(SetupCode.Encode(config));
-            setupMessage = "Copied to clipboard. It contains the bot token — share it only by private message.";
-            setupMessageIsWarning = true;
-        }
-
-        if (!canExport)
-            ImGui.EndDisabled();
-
-        ImGui.InputText("Paste setup code", ref setupCodeBuffer, 4096, ImGuiInputTextFlags.Password);
-
-        if (ImGui.Button("Import"))
-            TryImport(setupCodeBuffer);
+        if (ImGui.Button("Import from clipboard", ImGuiHelpers.ScaledVector2(180, 0)))
+            ImportFromClipboard();
 
         ImGui.SameLine();
 
-        if (ImGui.Button("Import from clipboard"))
-            ImportFromClipboard();
+        using (ImRaii.Disabled(!config.IsDiscordConfigured))
+        {
+            if (ImGui.Button("Export setup code", ImGuiHelpers.ScaledVector2(160, 0)))
+            {
+                ImGui.SetClipboardText(SetupCode.Encode(config));
+                setupMessage = "Copied to clipboard. It contains the bot token — share it only by private message.";
+                setupMessageIsWarning = true;
+            }
+        }
+
+        // Outside the disabled scope, so the explanation still works while the button is greyed out.
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Copies this plugin's whole Discord configuration to the clipboard as one setup code, "
+            + "for your fellow officers to import.\n\n"
+            + "The code contains the bot token: send it by private message only.\n\n"
+            + "Available once the Discord tab has been filled in and saved.");
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        var importWidth = 90 * ImGuiHelpers.GlobalScale;
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - importWidth - ImGui.GetStyle().ItemSpacing.X);
+        ImGui.InputTextWithHint("##setupCode", "…or paste a setup code here", ref setupCodeBuffer, 4096,
+            ImGuiInputTextFlags.Password);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Import", new Vector2(importWidth, 0)))
+            TryImport(setupCodeBuffer);
 
         if (setupMessage is { } setupMsg)
-            ImGui.TextColored(setupMessageIsWarning ? Yellow : Green, setupMsg);
+            TextColoured(setupMessageIsWarning ? Yellow : Green, setupMsg);
     }
 
     /// <summary>Imports the setup code in the clipboard. Draw thread only (touches ImGui).</summary>
@@ -324,7 +392,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void DrawBehaviourSettings()
     {
-        ImGui.TextUnformatted("Behaviour");
+        SectionHeader("Behaviour");
 
         var autoConnect = config.AutoConnect;
         if (ImGui.Checkbox("Connect automatically when a character logs in", ref autoConnect))
@@ -360,6 +428,16 @@ public sealed class ConfigWindow : Window, IDisposable
             config.AnnounceOnlineOffline = announce;
             config.Save();
         }
+    }
+
+    private void DrawAdvancedSettings()
+    {
+        ImGuiHelpers.ScaledDummy(4);
+        TextColoured(Grey, "Defaults are fine for almost everyone. Every officer should use the same");
+        TextColoured(Grey, "heartbeat and stale values (the setup code carries them).");
+        ImGuiHelpers.ScaledDummy(6);
+
+        SectionHeader("Timers");
 
         var delay = config.SendDelayMs;
         if (ImGui.InputInt("Delay between messages (ms)", ref delay, 50, 250))
@@ -383,7 +461,8 @@ public sealed class ConfigWindow : Window, IDisposable
             config.Save();
         }
 
-        ImGui.TextColored(Grey, "Standby queue only: how often this instance proves it is alive,");
-        ImGui.TextColored(Grey, "and how long a silent instance keeps its place in the queue.");
+        ImGuiHelpers.ScaledDummy(4);
+        TextColoured(Grey, "Standby queue only: how often this instance proves it is alive,");
+        TextColoured(Grey, "and how long a silent instance keeps its place in the queue.");
     }
 }
