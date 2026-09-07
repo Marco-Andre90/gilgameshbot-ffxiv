@@ -44,7 +44,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status",
+            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status | import",
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -118,11 +118,18 @@ public sealed class Plugin : IDalamudPlugin
                               + (Bridge.LastError is { } err ? $" Last error: {err}" : string.Empty), "GilgameshBot");
                 break;
 
+            case "import":
+                // The clipboard is read through ImGui, which may only be touched from the
+                // draw callback; the settings window picks this up on its next frame.
+                configWindow.RequestClipboardImport();
+                break;
+
             default:
                 configWindow.Toggle();
                 break;
         }
     }
+
 
     /// <summary>
     /// "Character Name @ World", read on the framework thread because it touches game state.

@@ -134,12 +134,51 @@ jobs:
           -p:EnableWindowsTargeting=true
           -p:Version=${{ steps.version.outputs.version }}.0
 
-      - name: Stage release asset
+      - name: Stage release assets
         if: steps.version.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          mkdir -p dist
+          # latest.zip keeps that exact name: the Dalamud repo entries point at the
+          # stable .../releases/latest/download/latest.zip redirect.
+          cp "GilgameshBot/bin/Release/GilgameshBot/latest.zip" dist/latest.zip
           cp "GilgameshBot/bin/Release/GilgameshBot/latest.zip" \
-             "GilgameshBot-${{ steps.version.outputs.tag }}.zip"
+             "dist/GilgameshBot-${{ steps.version.outputs.tag }}.zip"
+
+      - name: Build repo.json (Dalamud custom plugin repository)
+        if: steps.version.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # The repository is a JSON array of plugin manifests. It is published as a release
+          # asset (the release branch is protected, so nothing can be committed back) and
+          # officers add the "latest" redirect URL once in
+          # /xlsettings -> Experimental -> Custom Plugin Repositories.
+          download="https://github.com/Marco-Andre90/gilgameshbot-ffxiv/releases/latest/download/latest.zip"
+
+          jq -c \
+            --arg assemblyVersion "${VERSION}.0" \
+            --arg download "$download" \
+            --arg changelog "$TAG" \
+            --argjson lastUpdate "$(date +%s)" \
+            '[ . + {
+                 AssemblyVersion: $assemblyVersion,
+                 TestingAssemblyVersion: $assemblyVersion,
+                 DownloadLinkInstall: $download,
+                 DownloadLinkUpdate: $download,
+                 DownloadLinkTesting: $download,
+                 IsHide: false,
+                 IsTestingExclusive: false,
+                 LastUpdate: $lastUpdate,
+                 DownloadCount: 0,
+                 Changelog: $changelog
+               } ]' \
+            "GilgameshBot/bin/Release/GilgameshBot/GilgameshBot.json" > dist/repo.json
+
+          jq . dist/repo.json
 
       - name: Create tag and GitHub Release
         if: steps.version.outputs.skip != 'true'
@@ -150,4 +189,6 @@ jobs:
           --target "${{ github.sha }}"
           --title "GilgameshBot ${{ steps.version.outputs.version }}"
           --generate-notes
-          "GilgameshBot-${{ steps.version.outputs.tag }}.zip"
+          "dist/GilgameshBot-${{ steps.version.outputs.tag }}.zip"
+          "dist/latest.zip"
+          "dist/repo.json"
