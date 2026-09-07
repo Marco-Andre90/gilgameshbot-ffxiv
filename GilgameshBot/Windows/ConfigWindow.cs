@@ -2,6 +2,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using GilgameshBot.Relay;
+using GilgameshBot.Setup;
 
 namespace GilgameshBot.Windows;
 
@@ -24,15 +25,22 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool showToken;
     private string? validationMessage;
 
+    // Setup code. The pasted code is never echoed back to the screen or the log.
+    private string setupCodeBuffer = string.Empty;
+    private string? setupMessage;
+    private bool setupMessageIsWarning;
+    private bool pendingClipboardImport;
+
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
         this.plugin = plugin;
         config = plugin.Configuration;
 
-        tokenBuffer = config.BotToken;
-        guildIdBuffer = config.GuildId == 0 ? string.Empty : config.GuildId.ToString();
-        channelIdBuffer = config.ChannelId == 0 ? string.Empty : config.ChannelId.ToString();
-        stateChannelIdBuffer = config.StateChannelId == 0 ? string.Empty : config.StateChannelId.ToString();
+        tokenBuffer = string.Empty;
+        guildIdBuffer = string.Empty;
+        channelIdBuffer = string.Empty;
+        stateChannelIdBuffer = string.Empty;
+        RefreshBuffersFromConfig();
 
         Size = new Vector2(480, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -45,8 +53,35 @@ public sealed class ConfigWindow : Window, IDisposable
 
     public void Dispose() { }
 
+    /// <summary>
+    /// Queues an import of whatever setup code is in the clipboard, for /gilgamesh import.
+    /// The command runs on the game thread; the clipboard is reached through ImGui, which may
+    /// only be touched from the draw callback, so the work happens on the next frame instead.
+    /// Opening the window is what guarantees that frame comes.
+    /// </summary>
+    public void RequestClipboardImport()
+    {
+        pendingClipboardImport = true;
+        IsOpen = true;
+    }
+
     public override void Draw()
     {
+        if (pendingClipboardImport)
+        {
+            pendingClipboardImport = false;
+            ImportFromClipboard();
+
+            // Only the outcome is echoed to chat — never the code or anything decoded from it.
+            if (setupMessage is { } importMsg)
+            {
+                if (setupMessageIsWarning)
+                    Plugin.ChatGui.PrintError($"GilgameshBot: {importMsg}", "GilgameshBot");
+                else
+                    Plugin.ChatGui.Print($"GilgameshBot: {importMsg}", "GilgameshBot");
+            }
+        }
+
         DrawStatus();
         ImGui.Separator();
         DrawDiscordSettings();
@@ -129,6 +164,93 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextColored(Yellow, msg);
         }
+
+        ImGui.Spacing();
+        DrawSetupCode();
+    }
+
+    /// <summary>
+    /// Export/import of the whole Discord configuration as one string. The code carries the bot
+    /// token, so it only ever moves through the clipboard: it is never drawn, logged or printed.
+    /// </summary>
+    private void DrawSetupCode()
+    {
+        ImGui.TextUnformatted("Setup code");
+        ImGui.TextColored(Grey, "Got a setup code from your FC? Import it here — no other Discord settings are needed.");
+
+        var canExport = config.IsDiscordConfigured;
+        if (!canExport)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Export setup code"))
+        {
+            ImGui.SetClipboardText(SetupCode.Encode(config));
+            setupMessage = "Copied to clipboard. It contains the bot token — share it only by private message.";
+            setupMessageIsWarning = true;
+        }
+
+        if (!canExport)
+            ImGui.EndDisabled();
+
+        ImGui.InputText("Paste setup code", ref setupCodeBuffer, 4096, ImGuiInputTextFlags.Password);
+
+        if (ImGui.Button("Import"))
+            TryImport(setupCodeBuffer);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Import from clipboard"))
+            ImportFromClipboard();
+
+        if (setupMessage is { } setupMsg)
+            ImGui.TextColored(setupMessageIsWarning ? Yellow : Green, setupMsg);
+    }
+
+    /// <summary>Imports the setup code in the clipboard. Draw thread only (touches ImGui).</summary>
+    private void ImportFromClipboard()
+    {
+        string clipboard;
+        try
+        {
+            clipboard = ImGui.GetClipboardText();
+        }
+        catch (Exception)
+        {
+            setupMessage = "Could not read the clipboard.";
+            setupMessageIsWarning = true;
+            return;
+        }
+
+        TryImport(clipboard);
+    }
+
+    private void TryImport(string? code)
+    {
+        if (SetupCode.TryDecode(code, out var payload, out var error))
+        {
+            SetupCode.Apply(payload, config);
+            RefreshBuffersFromConfig();
+            setupCodeBuffer = string.Empty;
+            validationMessage = null;
+            setupMessage = plugin.Bridge.State == BridgeState.Disconnected
+                ? "Imported. Connect to apply."
+                : "Imported. Reconnect to apply.";
+            setupMessageIsWarning = false;
+        }
+        else
+        {
+            setupMessage = error;
+            setupMessageIsWarning = true;
+        }
+    }
+
+    /// <summary>Re-reads the edit buffers from the config, after an import.</summary>
+    private void RefreshBuffersFromConfig()
+    {
+        tokenBuffer = config.BotToken;
+        guildIdBuffer = config.GuildId == 0 ? string.Empty : config.GuildId.ToString();
+        channelIdBuffer = config.ChannelId == 0 ? string.Empty : config.ChannelId.ToString();
+        stateChannelIdBuffer = config.StateChannelId == 0 ? string.Empty : config.StateChannelId.ToString();
     }
 
     private void SaveDiscordSettings()
