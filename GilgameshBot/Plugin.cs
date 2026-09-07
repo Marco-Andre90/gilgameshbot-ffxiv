@@ -108,7 +108,13 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 
             case "status":
+                var role = Bridge.PresenceEnabled
+                    ? Bridge.IsLeader
+                        ? " Relaying (leader)."
+                        : $" On standby (#{Bridge.QueuePosition} in queue, leader: {Bridge.LeaderLabel ?? "unknown"})."
+                    : string.Empty;
                 ChatGui.Print($"GilgameshBot: {Bridge.State}, {Bridge.RelayedCount} message(s) relayed this session."
+                              + role
                               + (Bridge.LastError is { } err ? $" Last error: {err}" : string.Empty), "GilgameshBot");
                 break;
 

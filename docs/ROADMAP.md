@@ -16,7 +16,7 @@ A Free Company (FC) spread across Discord and the game should feel like one conv
 
 ## Phases
 
-### Phase 1 — POC: FFXIV → Discord *(current)*
+### Phase 1 — POC: FFXIV → Discord *(shipped, v0.1.x)*
 
 Scope
 
@@ -32,32 +32,39 @@ Done when
 
 - An officer can build, install as a dev plugin, configure, and see FC chat appear in the channel with working mentions.
 
-Known gaps (by design)
+Known gaps (by design, addressed in Phase 2)
 
 - Two officers online → duplicated messages.
 - Token stored in plain text in the plugin config.
 
-### Phase 2 — Multiple officers, one FC
+### Phase 2 — Multiple officers, one FC *(current)*
 
-Goal: any number of officers can run the plugin without duplicates, and Online/Offline reflects "at least one officer online".
+Goal: any number of officers can run the plugin without duplicates, and Online/Offline reflects "someone is relaying" vs. "nobody is".
 
-Approach (no server): **leader election through Discord itself.**
+Approach (no server): **a standby queue built from per-instance presence messages in Discord.**
 
-- The bot keeps a *state message* per FC in a hidden/admin channel: `leader=<character>, heartbeat=<timestamp>, session=<random id>`.
-- The leader edits the heartbeat every ~30 s. Followers only watch; they do not relay.
-- If the heartbeat is older than ~90 s, a follower claims leadership by editing the message with its own id, waits a few seconds, re-reads, and only starts relaying if its id is still there (resolves two followers claiming at once).
-- On clean shutdown the leader hands off (clears the heartbeat) so a follower takes over immediately.
-- Online/Offline announcements move from "this plugin connected" to "leadership changed from none → someone / someone → none".
+- Each running instance posts **its own** presence message in an optional hidden/admin *state channel*: `🎮 <Character @ World> · beat <n>`. No shared message, so there is nothing to write-race on.
+- **Ordering is the message id.** Discord snowflakes are assigned by the server and are monotonic, so the oldest presence message is the head of the queue. Local clocks are never used for ordering.
+- **Heartbeat**: every `HeartbeatSeconds` (default 30) an instance edits its own message, bumping the beat counter so `edited_timestamp` moves.
+- A **failed heartbeat forfeits the slot**: the instance deletes its presence message and posts a new one, which lands at the back of the queue. Retrying the edit instead would let an instance that went quiet long enough for a peer to promote itself return straight to the head of the queue (its snowflake is still the oldest) and relay alongside that peer until the peer's next tick.
+- **Alive** = the message's last edit is younger than `StaleSeconds` (default 90) relative to *server* time, where server time is the newest edit timestamp seen in the channel. Comparing server timestamps against each other means clock skew between officers' PCs is irrelevant.
+- **Leader** = the oldest alive presence message. Leadership is a pure function of the channel contents, recomputed on every tick by every instance — there is no claim protocol and no state machine.
+- **Lease**: an instance relays only while it is leader *and* its own last heartbeat succeeded within `StaleSeconds` (measured with a monotonic local tick count). A leader that loses its connection stands itself down before any peer can consider it stale, so a takeover can never produce duplicates. The cost is a relay gap of up to ~`StaleSeconds` after a crash; that is accepted.
+- **Followers drop, never buffer.** A message received while on standby is discarded at enqueue time, and leadership is re-checked again just before sending. Buffering would replay lines the outgoing leader already relayed.
+- **Stale cleanup**: presence messages untouched for more than 10 minutes are debris from crashed instances and may be deleted by anyone. Otherwise an instance only ever edits or deletes *its own* message.
+- **Announcements**: `🟢 Online … via <label>` on a false → true leadership change (first login, clean handoff, takeover after a crash). On clean shutdown the leader deletes its presence message first, then posts `🔴 Offline` only if no other alive instance remains; if a peer is alive it stays quiet and the peer announces itself on its next tick. Followers never announce.
+- `StateChannelId = 0` disables all of the above and keeps Phase 1 behaviour exactly (this instance always relays).
 
 Alternatives considered
 
+- *One shared state message with a claim protocol* (the original plan: `leader=…, heartbeat=…, session=<random id>`; a follower claims by editing it with its own id, waits, re-reads and only relays if its id survived) — dropped. Edits to a shared message are last-write-wins, so two concurrent claims genuinely race and the "write, wait, re-read" dance only narrows the window instead of closing it. It is also more code and more states than a leader computed as a pure function over per-instance messages, which cannot race because every instance writes only its own message.
 - *Content-hash dedup on the Discord side* — impossible without a server; each plugin would race to post.
 - *Relay server* — cleaner (dedup, heartbeats, token stays server-side) but needs hosting. Deferred; see "Optional: relay server" below.
 
-Open questions
+Resolved questions
 
-- Handoff latency vs. heartbeat cost (Discord edit rate limits are per-channel; 30 s is safe).
-- What happens to a message received during a leader change (accept a rare duplicate, or buffer briefly and dedupe on sender+text+minute).
+- *Handoff latency vs. heartbeat cost*: 30 s heartbeat / 90 s stale. Edits are one REST call per instance per 30 s in a single channel, far below Discord's per-channel edit limits; both are configurable and clamped (heartbeat 10–120 s, stale ≥ 2× heartbeat and ≤ 600 s).
+- *A message received during a leader change*: it is dropped. The lease guarantees the outgoing leader stopped relaying before the incoming one starts, so a short gap replaces the duplicate. Buffering plus dedup on sender+text+minute was rejected as more machinery for a worse failure mode (a burst of late duplicates).
 
 ### Phase 3 — Multiple FC branches
 
@@ -105,6 +112,9 @@ If hosting ever becomes available, a small relay service replaces the Discord-si
 | 7 | One branch at a time | Keep the POC small; branch table comes in Phase 3. |
 | 8 | Markdown escaped, mass mentions blocked | Players must not be able to format or ping the whole server from game chat. |
 | 9 | Docs split: README (now) / ROADMAP (later) | Keeps setup instructions accurate for the shipped phase. |
+| 10 | One presence message *per instance* instead of one shared state message | Each instance only ever writes its own message, so concurrent claims cannot race; leadership becomes a pure function of the channel (oldest alive snowflake wins) instead of a claim state machine. |
+| 11 | Lease: a leader stops relaying as soon as it cannot heartbeat | Guarantees the old leader is silent before a peer takes over. Trades a relay gap of up to ~StaleSeconds after a crash for never duplicating a line. |
+| 12 | Followers drop messages, never buffer them | On a clean handoff the previous leader already relayed them; replaying a backlog on promotion would duplicate exactly the lines a standby queue exists to avoid. |
 
 ## Reference projects
 
