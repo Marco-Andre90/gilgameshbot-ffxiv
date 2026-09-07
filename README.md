@@ -129,6 +129,7 @@ Type `@` followed by the person's Discord **username** (the lowercase handle, no
 - **"Bot is not a member of server …"** — the invite step was skipped, or the server ID is wrong.
 - **"Channel … not found"** — wrong channel ID, or the bot lacks *View Channel* on it.
 - **"State channel … not found"** — wrong state channel ID, or the bot lacks *View Channel* / *Read Message History* on it. The plugin does not connect until it can see that channel.
+- **"The bot cannot read #state-channel"** / connected but on standby with no leader — the bot is missing **Read Message History** on the state channel. Discord answers an empty list instead of an error in that case, so the plugin cannot see its own presence message. Grant the permission (channel → Edit → Permissions → the bot's role), then delete any leftover presence messages in that channel.
 - **Two officers, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
 - **One branch never relays while another does** — the two branches are sharing a state channel. Give each its own; otherwise their instances queue against each other and only one Free Company gets relayed.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.

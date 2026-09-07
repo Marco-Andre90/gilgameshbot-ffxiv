@@ -53,6 +53,8 @@ public sealed class PresenceCoordinator
     private readonly DiscordSocketClient client;
     private readonly SocketTextChannel stateChannel;
     private readonly Func<Task<string>> characterLabelProvider;
+    private readonly Action<string?> reportProblem;
+    private bool historyProblemReported;
 
     private IUserMessage? own;
     private string label = "an officer";
@@ -76,8 +78,10 @@ public sealed class PresenceCoordinator
         IPluginLog log,
         DiscordSocketClient client,
         SocketTextChannel stateChannel,
-        Func<Task<string>> characterLabelProvider)
+        Func<Task<string>> characterLabelProvider,
+        Action<string?> reportProblem)
     {
+        this.reportProblem = reportProblem;
         this.config = config;
         this.log = log;
         this.client = client;
@@ -307,12 +311,33 @@ public sealed class PresenceCoordinator
         if (presence.Count == 0)
         {
             if (own is not null)
-                log.Warning("Presence channel came back empty; re-posting this instance's message.");
+            {
+                // We just posted (or edited) our message successfully and still see nothing:
+                // Discord returns an EMPTY list, not an error, when the bot lacks Read Message
+                // History in the channel. Re-posting would only pile up messages we can't see,
+                // so stand down, keep heartbeating the one we have, and say what is missing.
+                if (!historyProblemReported)
+                {
+                    historyProblemReported = true;
+                    var problem = $"The bot cannot read #{stateChannel.Name}: give it Read Message History "
+                                  + "(and View Channel) on the state channel. Relaying is paused until then.";
+                    log.Error("{Problem}", problem);
+                    reportProblem(problem);
+                }
 
-            own = null;
-            SetLeadership(false);
+                SetLeadership(false);
+                return;
+            }
+
             await PostOwnAsync(ct);
             return;
+        }
+
+        if (historyProblemReported)
+        {
+            historyProblemReported = false;
+            reportProblem(null);
+            log.Information("Presence channel is readable again.");
         }
 
         // Server time: immune to clock skew between officers' PCs. Our own message, just edited,

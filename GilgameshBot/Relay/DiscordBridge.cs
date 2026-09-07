@@ -281,7 +281,8 @@ public sealed class DiscordBridge : IDisposable
             // session: two would mean two presence messages and two heartbeat loops.
             if (s.Coordinator is null)
             {
-                var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, characterLabelProvider);
+                var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, characterLabelProvider,
+                    problem => ReportCoordinatorProblem(s, problem));
                 coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
@@ -367,6 +368,32 @@ public sealed class DiscordBridge : IDisposable
 
         s.AnnouncedOnline = true; // claim first, so a retry cannot announce twice
         _ = Task.Run(() => AnnounceOnlineAsync(s, channel)); // never stall the heartbeat loop
+    }
+
+    /// <summary>
+    /// Surfaces a presence-channel problem (e.g. missing Read Message History) on
+    /// <see cref="LastError"/>, and clears it again once the coordinator reports recovery,
+    /// without wiping an unrelated error that arrived in between.
+    /// </summary>
+    private void ReportCoordinatorProblem(Session s, string? problem)
+    {
+        if (!IsCurrent(s))
+            return;
+
+        lock (gate)
+        {
+            if (problem is not null)
+            {
+                s.CoordinatorProblem = problem;
+                LastError = problem;
+            }
+            else if (s.CoordinatorProblem is { } previous)
+            {
+                s.CoordinatorProblem = null;
+                if (LastError == previous)
+                    LastError = null;
+            }
+        }
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)
@@ -571,6 +598,7 @@ public sealed class DiscordBridge : IDisposable
         public SocketTextChannel? TextChannel { get; set; }
         public MentionResolver? Mentions { get; set; }
         public PresenceCoordinator? Coordinator { get; set; }
+        public string? CoordinatorProblem { get; set; }
         public Task? Presence { get; set; }
         public bool AnnouncedOnline { get; set; }
     }
