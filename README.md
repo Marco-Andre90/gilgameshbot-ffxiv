@@ -142,7 +142,7 @@ Output: `GilgameshBot/bin/Release/GilgameshBot.dll`, plus `GilgameshBot/bin/Rele
 
 ### Releases
 
-Every merge into `release` runs `.github/workflows/release.yml`, which stamps the version, builds the plugin and attaches three assets to the GitHub Release: the versioned zip, `latest.zip` and `repo.json`. The custom repository URL is the `releases/latest/download/repo.json` redirect, so it always points at the newest release without anything being committed back to the protected branch. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Every merge into `release` runs `.github/workflows/release.yml`, which stamps the version, builds the plugin and attaches three assets to the GitHub Release: the versioned zip, `latest.zip` and `repo.json`. The custom repository URL is the `releases/latest/download/repo.json` redirect, so it always points at the newest release without anything being committed back to the protected branch. The icon shown in the plugin installer comes from `GilgameshBot/images/icon.png` — the build copies it next to `latest.zip` (DalamudPackager keeps images out of the zip on purpose) and `repo.json` points at it through `IconUrl`; Dalamud wants a square PNG of at most 512×512. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## A word on third-party tools
 

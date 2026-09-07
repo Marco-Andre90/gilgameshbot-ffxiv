@@ -31,6 +31,9 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool setupMessageIsWarning;
     private bool pendingClipboardImport;
 
+    // Set for one frame to force the Status tab (which owns the setup code block) to the front.
+    private bool selectStatusTab;
+
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
         this.plugin = plugin;
@@ -42,7 +45,7 @@ public sealed class ConfigWindow : Window, IDisposable
         stateChannelIdBuffer = string.Empty;
         RefreshBuffersFromConfig();
 
-        Size = new Vector2(480, 520);
+        Size = new Vector2(480, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -62,6 +65,7 @@ public sealed class ConfigWindow : Window, IDisposable
     public void RequestClipboardImport()
     {
         pendingClipboardImport = true;
+        selectStatusTab = true;
         IsOpen = true;
     }
 
@@ -82,11 +86,30 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
 
-        DrawStatus();
-        ImGui.Separator();
-        DrawDiscordSettings();
-        ImGui.Separator();
-        DrawBehaviourSettings();
+        if (!ImGui.BeginTabBar("##gilgameshTabs", ImGuiTabBarFlags.None))
+            return;
+
+        // Consumed exactly once, whether or not the tab ends up being drawn this frame.
+        var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
+        selectStatusTab = false;
+
+        if (ImGui.BeginTabItem("Status", statusFlags))
+        {
+            DrawStatus();
+            ImGui.Separator();
+            DrawSetupCode();
+            ImGui.Separator();
+            DrawBehaviourSettings();
+            ImGui.EndTabItem();
+        }
+
+        if (ImGui.BeginTabItem("Discord", ImGuiTabItemFlags.None))
+        {
+            DrawDiscordSettings();
+            ImGui.EndTabItem();
+        }
+
+        ImGui.EndTabBar();
     }
 
     private void DrawStatus()
@@ -141,6 +164,10 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void DrawDiscordSettings()
     {
+        ImGui.TextColored(Grey, "Only the officer who sets the bot up needs this tab.");
+        ImGui.TextColored(Grey, "Everyone else imports a setup code on the Status tab.");
+        ImGui.Spacing();
+
         ImGui.TextUnformatted("Discord");
 
         var flags = showToken ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -164,9 +191,6 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextColored(Yellow, msg);
         }
-
-        ImGui.Spacing();
-        DrawSetupCode();
     }
 
     /// <summary>
