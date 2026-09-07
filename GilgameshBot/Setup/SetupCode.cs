@@ -9,6 +9,7 @@ public sealed class SetupBranch
 {
     [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
     [JsonPropertyName("world")] public string World { get; set; } = string.Empty;
+    [JsonPropertyName("fcName")] public string FcName { get; set; } = string.Empty;
     [JsonPropertyName("tag")] public string Tag { get; set; } = string.Empty;
     [JsonPropertyName("guild")] public string Guild { get; set; } = string.Empty;
     [JsonPropertyName("channel")] public string Channel { get; set; } = string.Empty;
@@ -78,6 +79,7 @@ public static class SetupCode
                 {
                     Name = b.Name.Trim(),
                     World = b.World.Trim(),
+                    FcName = b.FcName.Trim(),
                     Tag = b.FcTag.Trim(),
                     Guild = b.GuildId.ToString(),
                     Channel = b.ChannelId.ToString(),
@@ -152,11 +154,11 @@ public static class SetupCode
 
         foreach (var branch in parsed.Branches)
         {
-            // Every message here is fixed text: branch names, worlds and tags come from the
-            // pasted input and must never be echoed back.
+            // Every message here is fixed text: branch names, worlds, Free Company names and
+            // tags come from the pasted input and must never be echoed back.
             if (string.IsNullOrWhiteSpace(branch.Name)
                 || string.IsNullOrWhiteSpace(branch.World)
-                || string.IsNullOrWhiteSpace(branch.Tag))
+                || string.IsNullOrWhiteSpace(branch.FcName))
             {
                 error = "One of the Free Company branches in the setup code is incomplete.";
                 return false;
@@ -172,6 +174,7 @@ public static class SetupCode
 
             branch.Name = branch.Name.Trim();
             branch.World = branch.World.Trim();
+            branch.FcName = branch.FcName.Trim();
             branch.Tag = branch.Tag.Trim();
             branch.GuildId = guildId;
             branch.ChannelId = channelId;
@@ -201,6 +204,7 @@ public static class SetupCode
             {
                 Name = b.Name,
                 World = b.World,
+                FcName = b.FcName,
                 FcTag = b.Tag,
                 GuildId = b.GuildId,
                 ChannelId = b.ChannelId,

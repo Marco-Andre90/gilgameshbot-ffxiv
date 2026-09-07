@@ -3,12 +3,12 @@
 A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free Company chat to a Discord channel**. Named after the dimension-hopping Gilgamesh: while an officer running the plugin is in the game, the FC's conversation jumps over to Discord.
 
 > **Current phase: 4 — multiple Free Company branches.**
-> One bot, any number of FC branches (one per home world + FC tag), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of officers can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code. The roadmap and the reasoning behind the design live in [`docs/ROADMAP.md`](docs/ROADMAP.md); this README only covers what works today.
+> One bot, any number of FC branches (one per home world + Free Company name), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of officers can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code. The roadmap and the reasoning behind the design live in [`docs/ROADMAP.md`](docs/ROADMAP.md); this README only covers what works today.
 
 ## What it does today
 
 - While your character is logged in, the plugin connects to Discord as **GilgameshBot** and posts every Free Company chat line to the configured channel as `**Character Name**: message`.
-- **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and FC tag and looks them up in a branch table; each branch has its own Discord server, relay channel and state channel. An officer with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
+- **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and Free Company name and looks them up in a branch table; each branch has its own Discord server, relay channel and state channel. An officer with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** when the last officer stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
 - **One setup code configures everybody else.** The officer who created the bot exports a single string carrying the token and *every* branch; every other officer imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
@@ -58,13 +58,13 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
 2. On the **Discord** tab, paste the **bot token** → **Save token**. One bot serves every branch.
 3. Still on the Discord tab, fill in the branch editor and click **Add branch**:
    - **Name** — a label for you, e.g. `Kraken`.
-   - **Home world** and **FC tag** — click **Use my character** while logged in on a character in that FC and both are filled in for you. (The tag is what appears in « » next to your name; type it without the brackets.)
+   - **Home world**, **FC name** and **FC tag** — click **Use my character** while logged in on a character in that FC and all three are filled in for you. The **home world + FC name** pair is what a character is matched on: FC names are unique on a world, FC tags are not (two Free Companies on one world may share a tag), so the tag is only a label and an extra check. The FC name is the full name spelled out on your Free Company profile; the tag is what appears in « » next to your name, typed without the brackets.
    - **Server ID**, **Channel ID**, **State channel ID** — from the Discord setup below.
 4. Repeat step 3 for every other branch. Each branch needs its **own** state channel; two branches sharing one would fight over who relays.
 5. Click **Connect** (or log out and back in with *Connect automatically* enabled).
 6. On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow officers **by private message**. They import it and are done, on every one of their characters.
 
-The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`, and the Status tab shows `Branch: Kraken («KRKN» @ Behemoth)`.
+The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`, and the Status tab shows `Branch: Kraken («KRKN» Kraken Company @ Behemoth)`.
 
 Officers with characters in more than one branch need nothing extra: one setup code covers all of them, and the plugin switches branch when they switch character.
 
@@ -102,7 +102,7 @@ The state channel fills up with one short message per running plugin (`🎮 Char
 | Turn `@name` into Discord mentions | on | Exact match on a mentionable role name, then username, then display name |
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |
-| Free Company branches | at least one | Table on the Discord tab: one row per FC, with a label, the home world and FC tag it is matched by, and its own Discord server, relay channel and state channel. The plugin picks the row matching the logged-in character |
+| Free Company branches | at least one | Table on the Discord tab: one row per FC, with a label, the home world and Free Company name it is matched by (plus the FC tag as a label and extra check), and its own Discord server, relay channel and state channel. The plugin picks the row matching the logged-in character |
 | Heartbeat (s) | 30 | How often this instance refreshes its presence message. Clamped to 10–120 |
 | Stale after (s) | 90 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
 
@@ -122,8 +122,8 @@ Type `@` followed by the person's Discord **username** (the lowercase handle, no
 ## Troubleshooting
 
 - **"Discord is not configured: the bot token is missing."** — save a token on the Discord tab, or import a setup code.
-- **"No branch configured for «KRKN» @ Behemoth."** — this character's Free Company has no row in the branch table. Add one on the Discord tab (**Use my character** fills in the home world and FC tag), or ask the officer who set the bot up for an updated setup code.
-- **"This character is not in a Free Company, so there is nothing to relay."** — the plugin waited 30 seconds after login and never saw an FC tag. Expected on a character with no FC; otherwise `/gilgamesh connect` tries again.
+- **"No branch configured for Kraken Company «KRKN» @ Behemoth."** — this character's Free Company has no row in the branch table. Add one on the Discord tab (**Use my character** fills in the home world, FC name and FC tag), or ask the officer who set the bot up for an updated setup code. If a row *looks* right, check its **FC name** matches the FC exactly — the name, not the tag, is what is matched.
+- **"This character is not in a Free Company, so there is nothing to relay."** — the plugin waited 30 seconds after login and never saw a Free Company name. Expected on a character with no FC; otherwise `/gilgamesh connect` tries again.
 - **"This is not a GilgameshBot setup code."** — what was copied is not a setup code (it must start with `GB2:`). Copy the whole line your officer sent, nothing else.
 - **"The setup code is damaged or incomplete."** — the code was cut short, wrapped or auto-corrected on the way. Ask for it again in a private message and copy it in one go.
 - **"Bot is not a member of server …"** — the invite step was skipped, or the server ID is wrong.

@@ -30,6 +30,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private int selectedBranch = -1;
     private string branchNameBuffer = string.Empty;
     private string branchWorldBuffer = string.Empty;
+    private string branchFcNameBuffer = string.Empty;
     private string branchTagBuffer = string.Empty;
     private string guildIdBuffer = string.Empty;
     private string channelIdBuffer = string.Empty;
@@ -37,7 +38,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
     // "Use my character" reads game state on the framework thread; the result lands here on a
     // later frame. Draw itself never blocks.
-    private Task<(bool Ok, string World, string Tag)>? characterProbe;
+    private Task<(bool Ok, string World, string Tag, string FcName)>? characterProbe;
 
     // Setup code. The pasted code is never echoed back to the screen or the log.
     private string setupCodeBuffer = string.Empty;
@@ -291,7 +292,8 @@ public sealed class ConfigWindow : Window, IDisposable
 
         TextWrappedColoured(Grey,
             "One row per Free Company. The plugin picks the row that matches the logged-in "
-            + "character's home world and FC tag — nothing is ever chosen by hand.");
+            + "character's home world and Free Company name — nothing is ever chosen by hand. "
+            + "(FC tags are not unique on a world, so the name is what identifies the FC.)");
         ImGuiHelpers.ScaledDummy(4);
 
         if (config.Branches.Count == 0)
@@ -311,7 +313,7 @@ public sealed class ConfigWindow : Window, IDisposable
             {
                 ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f);
                 ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthStretch, 3f);
-                ImGui.TableSetupColumn("FC tag", ImGuiTableColumnFlags.WidthStretch, 2f);
+                ImGui.TableSetupColumn("Free Company", ImGuiTableColumnFlags.WidthStretch, 4f);
                 ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthStretch, 2f);
                 ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed,
                     ImGui.GetFrameHeight() + ImGui.GetStyle().CellPadding.X);
@@ -334,7 +336,9 @@ public sealed class ConfigWindow : Window, IDisposable
                     ImGui.TextUnformatted(branch.World);
 
                     ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(branch.FcTag);
+                    ImGui.TextUnformatted(branch.FcTag.Trim().Length > 0
+                        ? $"«{branch.FcTag}» {branch.FcName}"
+                        : branch.FcName);
 
                     ImGui.TableNextColumn();
                     TextColoured(branch.IsComplete ? Green : Yellow, branch.IsComplete ? "complete" : "incomplete");
@@ -370,10 +374,17 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.InputText("Name", ref branchNameBuffer, 64);
         ImGui.InputText("Home world", ref branchWorldBuffer, 64);
+        ImGui.InputText("FC name", ref branchFcNameBuffer, 64);
         ImGui.InputText("FC tag", ref branchTagBuffer, 32);
 
+        ImGuiHelpers.ScaledDummy(2);
+        TextWrappedColoured(Grey,
+            "The home world and the full FC name are what a character is matched on. The tag is a "
+            + "label: two Free Companies on one world may share a tag, so it cannot be the key.");
+        ImGuiHelpers.ScaledDummy(4);
+
         // Draw runs on the game thread, so IsLoaded / LocalPlayer may be read here directly;
-        // the actual world + tag read still goes through the framework thread, on click.
+        // the actual Free Company read still goes through the framework thread, on click.
         var canProbe = characterProbe is null
                        && Plugin.PlayerState.IsLoaded
                        && Plugin.ObjectTable.LocalPlayer is not null;
@@ -386,7 +397,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Fills in Home world and FC tag from the character you are logged in as. "
+            "Fills in Home world, FC name and FC tag from the character you are logged in as. "
             + "Needs a character in a Free Company to be logged in.");
 
         ImGuiHelpers.ScaledDummy(4);
@@ -414,13 +425,16 @@ public sealed class ConfigWindow : Window, IDisposable
             ClearBranchEditor();
     }
 
-    /// <summary>Reads the world + FC tag off the logged-in character, on the framework thread.</summary>
+    /// <summary>
+    /// Reads the world + Free Company name and tag off the logged-in character, on the framework
+    /// thread.
+    /// </summary>
     private void StartCharacterProbe()
     {
         characterProbe = Plugin.Framework.RunOnFrameworkThread(() =>
         {
-            var ok = Plugin.TryReadBranchKey(out var world, out var tag);
-            return (ok, world, tag);
+            var ok = Plugin.TryReadBranchKey(out var world, out var tag, out var fcName);
+            return (ok, world, tag, fcName);
         });
     }
 
@@ -438,7 +452,7 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        var (ok, world, tag) = probe.Result;
+        var (ok, world, tag, fcName) = probe.Result;
         if (!ok)
         {
             validationMessage = "Log in on a character that is in a Free Company first.";
@@ -446,10 +460,11 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         branchWorldBuffer = world;
+        branchFcNameBuffer = fcName;
         branchTagBuffer = tag;
 
         if (branchNameBuffer.Trim().Length == 0)
-            branchNameBuffer = tag;
+            branchNameBuffer = tag.Length > 0 ? tag : fcName;
 
         validationMessage = null;
     }
@@ -468,9 +483,9 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(branchTagBuffer))
+        if (string.IsNullOrWhiteSpace(branchFcNameBuffer))
         {
-            validationMessage = "FC tag is required.";
+            validationMessage = "FC name is required.";
             return;
         }
 
@@ -496,6 +511,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         branch.Name = branchNameBuffer.Trim();
         branch.World = branchWorldBuffer.Trim();
+        branch.FcName = branchFcNameBuffer.Trim();
         branch.FcTag = branchTagBuffer.Trim().Trim('«', '»').Trim();
         branch.GuildId = guildId;
         branch.ChannelId = channelId;
@@ -518,6 +534,7 @@ public sealed class ConfigWindow : Window, IDisposable
         var branch = config.Branches[index];
         branchNameBuffer = branch.Name;
         branchWorldBuffer = branch.World;
+        branchFcNameBuffer = branch.FcName;
         branchTagBuffer = branch.FcTag;
         guildIdBuffer = branch.GuildId == 0 ? string.Empty : branch.GuildId.ToString();
         channelIdBuffer = branch.ChannelId == 0 ? string.Empty : branch.ChannelId.ToString();
@@ -529,6 +546,7 @@ public sealed class ConfigWindow : Window, IDisposable
         selectedBranch = -1;
         branchNameBuffer = string.Empty;
         branchWorldBuffer = string.Empty;
+        branchFcNameBuffer = string.Empty;
         branchTagBuffer = string.Empty;
         guildIdBuffer = string.Empty;
         channelIdBuffer = string.Empty;

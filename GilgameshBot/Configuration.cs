@@ -8,9 +8,11 @@ namespace GilgameshBot;
 /// officer with characters in several branches needs no extra setup.
 /// </summary>
 /// <remarks>
-/// The matching key is <see cref="World"/> + <see cref="FcTag"/>, compared trimmed and
-/// case-insensitively. Each branch must have its <em>own</em> state channel: two branches
-/// sharing one would make their leaders contend and silence one of the two Free Companies.
+/// The matching key is <see cref="World"/> + <see cref="FcName"/>, compared trimmed and
+/// case-insensitively. Free Company <em>names</em> are unique on a world; tags are not, so
+/// <see cref="FcTag"/> is only a human label and a secondary check. Each branch must have its
+/// <em>own</em> state channel: two branches sharing one would make their leaders contend and
+/// silence one of the two Free Companies.
 /// </remarks>
 [Serializable]
 public sealed class FcBranch
@@ -21,7 +23,16 @@ public sealed class FcBranch
     /// <summary>Home world of the characters in this branch, e.g. "Behemoth".</summary>
     public string World { get; set; } = string.Empty;
 
-    /// <summary>Free Company tag without the « » brackets, e.g. "KRKN".</summary>
+    /// <summary>
+    /// Full Free Company name, e.g. "Kraken Company". Together with <see cref="World"/> this is
+    /// the matching key: FC names are unique per world, FC tags are not.
+    /// </summary>
+    public string FcName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Free Company tag without the « » brackets, e.g. "KRKN". A label, and a secondary check
+    /// when both sides have one — never the key on its own.
+    /// </summary>
     public string FcTag { get; set; } = string.Empty;
 
     /// <summary>ID of the Discord server (guild) this branch relays into.</summary>
@@ -40,18 +51,38 @@ public sealed class FcBranch
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(Name)
         && !string.IsNullOrWhiteSpace(World)
-        && !string.IsNullOrWhiteSpace(FcTag)
+        && !string.IsNullOrWhiteSpace(FcName)
         && GuildId != 0
         && ChannelId != 0
         && StateChannelId != 0;
 
-    /// <summary>"Kraken («KRKN» @ Behemoth)", for the status line and log messages.</summary>
-    public string Describe() => $"{Name} («{FcTag}» @ {World})";
+    /// <summary>
+    /// "Kraken («KRKN» Kraken Company @ Behemoth)", for the status line and log messages.
+    /// The tag is dropped when the branch has none.
+    /// </summary>
+    public string Describe() =>
+        FcTag.Trim().Length > 0
+            ? $"{Name} («{FcTag}» {FcName} @ {World})"
+            : $"{Name} ({FcName} @ {World})";
 
-    /// <summary>True when this branch is the one the given character belongs to.</summary>
-    public bool Matches(string world, string fcTag) =>
-        string.Equals(World.Trim(), world.Trim(), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(FcTag.Trim(), fcTag.Trim(), StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// True when this branch is the one the given character belongs to: same home world and same
+    /// Free Company name. The tag is only compared when both sides have one, so a branch saved
+    /// without a tag still matches, and a mistyped tag on a matching name is caught.
+    /// </summary>
+    public bool Matches(string world, string fcTag, string fcName)
+    {
+        if (!string.Equals(World.Trim(), world.Trim(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(FcName.Trim(), fcName.Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var ourTag = FcTag.Trim();
+        var theirTag = fcTag.Trim();
+
+        return ourTag.Length == 0
+               || theirTag.Length == 0
+               || string.Equals(ourTag, theirTag, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>
@@ -72,7 +103,7 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Bot token from the Discord Developer Portal (Bot → Reset Token). One bot, all branches.</summary>
     public string BotToken { get; set; } = string.Empty;
 
-    /// <summary>The Free Company branches this bot serves, one per (home world, FC tag).</summary>
+    /// <summary>The Free Company branches this bot serves, one per (home world, FC name).</summary>
     public List<FcBranch> Branches { get; set; } = [];
 
     // --- Behaviour ---
@@ -112,12 +143,12 @@ public sealed class Configuration : IPluginConfiguration
         !string.IsNullOrWhiteSpace(BotToken) && Branches.Any(b => b.IsComplete);
 
     /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
-    public FcBranch? FindBranch(string world, string fcTag)
+    public FcBranch? FindBranch(string world, string fcTag, string fcName)
     {
-        if (string.IsNullOrWhiteSpace(world) || string.IsNullOrWhiteSpace(fcTag))
+        if (string.IsNullOrWhiteSpace(world) || string.IsNullOrWhiteSpace(fcName))
             return null;
 
-        return Branches.FirstOrDefault(b => b.IsComplete && b.Matches(world, fcTag));
+        return Branches.FirstOrDefault(b => b.IsComplete && b.Matches(world, fcTag, fcName));
     }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);

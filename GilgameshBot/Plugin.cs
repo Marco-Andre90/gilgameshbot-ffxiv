@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using GilgameshBot.Chat;
 using GilgameshBot.Relay;
 using GilgameshBot.Windows;
+using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
 namespace GilgameshBot;
 
@@ -21,7 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>How long to keep waiting for the Free Company tag to appear after a login.</summary>
     private static readonly TimeSpan BranchResolveWindow = TimeSpan.FromSeconds(30);
 
-    /// <summary>Gap between two attempts to read the character's world + FC tag.</summary>
+    /// <summary>Gap between two attempts to read the character's world + Free Company.</summary>
     private static readonly TimeSpan BranchResolveInterval = TimeSpan.FromSeconds(1);
 
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
@@ -101,12 +102,12 @@ public sealed class Plugin : IDalamudPlugin
     // --- Branch resolution ------------------------------------------------------------------
 
     /// <summary>
-    /// Reads the logged-in character's home world and Free Company tag, and connects the branch
+    /// Reads the logged-in character's home world and Free Company name, and connects the branch
     /// they belong to. Started on login, on plugin load in the world, from /gilgamesh connect and
     /// from the settings window's Connect button.
     /// </summary>
     /// <remarks>
-    /// The FC tag is not populated in the first frames after a login, so this retries on the
+    /// The Free Company is not populated in the first frames after a login, so this retries on the
     /// framework thread once a second for <see cref="BranchResolveWindow"/>. It also keeps
     /// retrying while <see cref="DiscordBridge.Connect"/> is a no-op because a previous session
     /// is still tearing down — that is exactly what happens when an officer logs straight from a
@@ -142,21 +143,31 @@ public sealed class Plugin : IDalamudPlugin
         var deadline = DateTime.UtcNow + BranchResolveWindow;
         string? lastWorld = null;
         string? lastTag = null;
+        string? lastName = null;
         var branchFound = false;
 
         try
         {
             while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
-                var (world, tag) = await Framework.RunOnFrameworkThread(ReadCharacterBranchKey);
+                var (world, tag, name, fcId) = await Framework.RunOnFrameworkThread(ReadCharacterBranchKey);
 
-                if (world.Length > 0 && tag.Length > 0)
+                // The name is the key, but the tag is what proves the read is fresh: it hangs
+                // off LocalPlayer, which does not exist until the new character has loaded, while
+                // the info proxy is a UIModule singleton that survives a character switch and can
+                // still hold the previous character's Free Company for a few frames.
+                if (world.Length > 0 && name.Length > 0 && tag.Length > 0)
                 {
                     lastWorld = world;
                     lastTag = tag;
+                    lastName = name;
 
-                    if (Configuration.FindBranch(world, tag) is { } branch)
+                    if (Configuration.FindBranch(world, tag, name) is { } branch)
                     {
+                        if (!branchFound)
+                            Log.Debug("Free Company {Name} (id {Id}) @ {World} matches branch {Branch}.",
+                                name, fcId, world, branch.Describe());
+
                         branchFound = true;
 
                         switch (Bridge.State)
@@ -210,7 +221,7 @@ public sealed class Plugin : IDalamudPlugin
             // The window expired while a previous session was still tearing down. One last try,
             // so a very slow handoff does not leave the plugin idle with nothing to show for it.
             if (Bridge.State == BridgeState.Disconnected
-                && Configuration.FindBranch(lastWorld!, lastTag!) is { } late)
+                && Configuration.FindBranch(lastWorld!, lastTag!, lastName!) is { } late)
             {
                 Bridge.ClearUnavailable();
                 Bridge.Connect(late);
@@ -221,23 +232,31 @@ public sealed class Plugin : IDalamudPlugin
 
         // The window expired without a match. Say why once, on the bridge, so the status line
         // and /gilgamesh status can both explain it.
-        var reason = lastWorld is not null && lastTag is not null
-            ? $"No branch configured for «{lastTag}» @ {lastWorld}. "
-              + "Ask the officer who set the bot up to add it."
-            : "This character is not in a Free Company, so there is nothing to relay.";
+        string reason;
+        if (lastWorld is not null && lastName is not null)
+        {
+            var fc = lastTag is { Length: > 0 } ? $"{lastName} «{lastTag}»" : lastName;
+            reason = $"No branch configured for {fc} @ {lastWorld}. "
+                     + "Ask the officer who set the bot up to add it.";
+        }
+        else
+        {
+            reason = "This character is not in a Free Company, so there is nothing to relay.";
+        }
 
         Bridge.SetUnavailable(reason);
         Log.Warning("{Reason}", reason);
     }
 
     /// <summary>
-    /// Home world name + Free Company tag of the logged-in character, both trimmed and empty
-    /// when unavailable. Framework thread only: it reads game state.
+    /// Home world, Free Company tag, Free Company name and Free Company ID of the logged-in
+    /// character. Strings are trimmed and empty when unavailable, the ID is 0. Framework thread
+    /// only: it reads game state.
     /// </summary>
-    private static (string World, string Tag) ReadCharacterBranchKey()
+    private static (string World, string Tag, string Name, ulong FcId) ReadCharacterBranchKey()
     {
         if (!PlayerState.IsLoaded)
-            return (string.Empty, string.Empty);
+            return (string.Empty, string.Empty, string.Empty, 0);
 
         var world = PlayerState.HomeWorld.ValueNullable?.Name.ExtractText() ?? string.Empty;
 
@@ -245,14 +264,51 @@ public sealed class Plugin : IDalamudPlugin
         // tag at all for a character without a Free Company).
         var tag = ObjectTable.LocalPlayer?.CompanyTag.TextValue ?? string.Empty;
 
-        return (world.Trim(), tag.Trim());
+        var (name, fcId) = ReadFreeCompany();
+
+        return (world.Trim(), tag.Trim(), name.Trim(), fcId);
     }
 
-    /// <summary>True when a character with a Free Company is logged in. Framework thread only.</summary>
-    public static bool TryReadBranchKey(out string world, out string tag)
+    /// <summary>
+    /// Free Company name + ID from the game's own info proxy. The proxy is filled in from the
+    /// zone-in packet, so like the tag it is empty for the first frames after a login — and for
+    /// the whole session on a character with no Free Company. Framework thread only.
+    /// </summary>
+    /// <remarks>
+    /// The proxy is a UIModule singleton and outlives a logout inside one game session, so this
+    /// may return the <em>previous</em> character's Free Company right after a character switch.
+    /// Callers only trust it on a tick where the FC tag (read off LocalPlayer, which the new
+    /// character has to exist for) is also present.
+    /// <para>
+    /// Failures are swallowed and reported as "no name yet" on purpose: a native read that throws
+    /// must feed the retry loop, not end branch resolution for this login.
+    /// </para>
+    /// </remarks>
+    private static unsafe (string Name, ulong Id) ReadFreeCompany()
     {
-        (world, tag) = ReadCharacterBranchKey();
-        return world.Length > 0 && tag.Length > 0;
+        try
+        {
+            var proxy = InfoProxyFreeCompany.Instance();
+            if (proxy == null || proxy->Id == 0)
+                return (string.Empty, 0);
+
+            return (proxy->NameString, proxy->Id);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not read the Free Company info proxy.");
+            return (string.Empty, 0);
+        }
+    }
+
+    /// <summary>
+    /// True when a character with a Free Company is logged in. The tag is required alongside the
+    /// name for the same freshness reason as in the resolve loop. Framework thread only.
+    /// </summary>
+    public static bool TryReadBranchKey(out string world, out string tag, out string fcName)
+    {
+        (world, tag, fcName, _) = ReadCharacterBranchKey();
+        return world.Length > 0 && fcName.Length > 0 && tag.Length > 0;
     }
 
     // --- Events and commands ----------------------------------------------------------------
