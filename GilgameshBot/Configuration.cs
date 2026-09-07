@@ -27,9 +27,8 @@ public sealed class Configuration : IPluginConfiguration
     public ulong ChannelId { get; set; }
 
     /// <summary>
-    /// Optional hidden/admin channel where every running instance keeps a presence message, so
-    /// that exactly one of them relays and the others queue up. 0 disables the standby queue:
-    /// this instance always relays (Phase 1 behaviour).
+    /// Hidden/admin channel where every running instance keeps a presence message, so that
+    /// exactly one of them relays and the others queue up. Required; all officers use the same one.
     /// </summary>
     public ulong StateChannelId { get; set; }
 
@@ -67,7 +66,7 @@ public sealed class Configuration : IPluginConfiguration
     public int StaleSeconds { get; set; } = 90;
 
     public bool IsDiscordConfigured =>
-        !string.IsNullOrWhiteSpace(BotToken) && GuildId != 0 && ChannelId != 0;
+        !string.IsNullOrWhiteSpace(BotToken) && GuildId != 0 && ChannelId != 0 && StateChannelId != 0;
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

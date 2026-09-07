@@ -51,7 +51,7 @@ public sealed class PresenceCoordinator
     private readonly Configuration config;
     private readonly IPluginLog log;
     private readonly DiscordSocketClient client;
-    private readonly SocketTextChannel? stateChannel;
+    private readonly SocketTextChannel stateChannel;
     private readonly Func<Task<string>> characterLabelProvider;
 
     private IUserMessage? own;
@@ -75,7 +75,7 @@ public sealed class PresenceCoordinator
         Configuration config,
         IPluginLog log,
         DiscordSocketClient client,
-        SocketTextChannel? stateChannel,
+        SocketTextChannel stateChannel,
         Func<Task<string>> characterLabelProvider)
     {
         this.config = config;
@@ -93,9 +93,6 @@ public sealed class PresenceCoordinator
     /// </summary>
     public event Action<bool, bool>? LeadershipChanged;
 
-    /// <summary>False when no state channel is configured or it could not be resolved: Phase 1 behaviour.</summary>
-    public bool Enabled => stateChannel is not null;
-
     /// <summary>True when this instance owns the oldest alive presence message.</summary>
     public bool IsLeader => isLeader;
 
@@ -108,13 +105,9 @@ public sealed class PresenceCoordinator
     /// <summary>Character label of the current leader, if known.</summary>
     public string? LeaderLabel => leaderLabel;
 
-    /// <summary>
-    /// The relay gate: always true without a state channel; otherwise leadership plus a valid
-    /// heartbeat lease.
-    /// </summary>
+    /// <summary>The relay gate: leadership plus a valid heartbeat lease.</summary>
     public bool CanRelay =>
-        !Enabled
-        || (isLeader && Environment.TickCount64 - Volatile.Read(ref lastHeartbeatOkTicks) < StaleSeconds * 1000L);
+        isLeader && Environment.TickCount64 - Volatile.Read(ref lastHeartbeatOkTicks) < StaleSeconds * 1000L;
 
     // Clamped here rather than only in the UI: the config file is hand-editable and old configs
     // do not have the keys at all. StaleSeconds < 2 × heartbeat would break the lease invariant.
@@ -124,13 +117,10 @@ public sealed class PresenceCoordinator
 
     /// <summary>
     /// Posts this instance's presence message, then heartbeats and recomputes leadership until
-    /// <paramref name="ct"/> is cancelled. Returns immediately when presence is disabled.
+    /// <paramref name="ct"/> is cancelled.
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
     {
-        if (stateChannel is null)
-            return;
-
         try
         {
             label = await ReadCharacterLabelAsync();
@@ -165,9 +155,6 @@ public sealed class PresenceCoordinator
     /// </summary>
     public async Task<bool> ResignAsync(CancellationToken ct)
     {
-        if (stateChannel is null)
-            return false;
-
         var mine = own;
         own = null;
         SetLeadership(false);
@@ -218,7 +205,7 @@ public sealed class PresenceCoordinator
     {
         try
         {
-            own = await stateChannel!.SendMessageAsync(
+            own = await stateChannel.SendMessageAsync(
                 BuildContent(),
                 allowedMentions: AllowedMentions.None,
                 options: new RequestOptions { CancelToken = ct });
@@ -419,7 +406,7 @@ public sealed class PresenceCoordinator
     {
         // Through IMessageChannel so CacheMode can be stated explicitly: presence is only correct
         // with fresh edit timestamps, and the socket overload would prefer the (empty) cache.
-        var messages = await ((IMessageChannel)stateChannel!)
+        var messages = await ((IMessageChannel)stateChannel)
             .GetMessagesAsync(100, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
             .FlattenAsync();
 

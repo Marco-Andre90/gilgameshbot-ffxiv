@@ -10,11 +10,10 @@ A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free
 - While your character is logged in, the plugin connects to Discord as **GilgameshBot** and posts every Free Company chat line to the configured channel as `**Character Name**: message`.
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** when the last officer stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
-- **Several officers can run the plugin at the same time** without duplicating anything, as long as you configure the optional *state channel*. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 90 seconds if the game crashed. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
+- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 90 seconds if the game crashed. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
 
 ### Known limitations in this phase
 
-- Without the state channel configured, every running instance relays: two officers online = every message posted twice. Configure it if more than one officer runs the plugin.
 - After a crash (not a clean logout) there is a gap of up to ~90 seconds before the next officer takes over. This is deliberate: the crashed instance's lease has to expire before anyone else may relay, which is what makes duplicates impossible.
 - One FC and one channel per configuration. Multiple FC branches (one channel each) is Phase 3.
 - Nothing goes from Discord back into the game. That is Phase 4.
@@ -33,9 +32,9 @@ A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free
 3. **OAuth2 → URL Generator**: scope `bot`; permissions **View Channels** and **Send Messages** only. Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
 4. In Discord, enable **Settings → Advanced → Developer Mode**, then right-click the server → **Copy Server ID**, and right-click the target channel → **Copy Channel ID**.
 5. Make sure the bot can see and post in that channel (check the channel's permission overrides).
-6. *(Optional, needed only if more than one officer runs the plugin)* Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID (optional)** in the plugin settings. Every officer running the plugin must point at the **same** state channel.
+6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the plugin settings. Every officer running the plugin must point at the **same** state channel.
 
-The state channel fills up with one short message per running plugin (`🎮 Character @ World · beat 42`), which the plugins keep updating and clean up after themselves. Leaving it empty keeps the old behaviour: this instance always relays.
+The state channel fills up with one short message per running plugin (`🎮 Character @ World · beat 42`), which the plugins keep updating and clean up after themselves.
 
 ## Build
 
@@ -56,7 +55,7 @@ Output: `GilgameshBot/bin/x64/Release/GilgameshBot.dll`, plus `GilgameshBot/bin/
 ## Configure
 
 1. `/gilgamesh` opens the settings window (also reachable from the plugin installer's settings button).
-2. Paste the **bot token**, the **server ID** and the **channel ID** → **Save Discord settings**.
+2. Paste the **bot token**, the **server ID**, the **channel ID** and the **state channel ID** → **Save Discord settings**.
 3. Click **Connect** (or log out and back in with *Connect automatically* enabled).
 
 The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`.
@@ -80,7 +79,7 @@ The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat
 | Turn `@name` into Discord mentions | on | Exact match on a mentionable role name, then username, then display name |
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |
-| State channel ID (optional) | empty | Enables the standby queue. Empty = this instance always relays |
+| State channel ID | required | Channel holding the presence messages; the same for every officer |
 | Heartbeat (s) | 30 | How often this instance refreshes its presence message. Clamped to 10–120 |
 | Stale after (s) | 90 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
 
@@ -96,10 +95,10 @@ Type `@` followed by the person's Discord **username** (the lowercase handle, no
 
 ## Troubleshooting
 
-- **"Discord is not configured"** — token, server ID or channel ID is missing. Save them first.
+- **"Discord is not configured"** — token, server ID, channel ID or state channel ID is missing. Save them first.
 - **"Bot is not a member of server …"** — the invite step was skipped, or the server ID is wrong.
 - **"Channel … not found"** — wrong channel ID, or the bot lacks *View Channel* on it.
-- **"State channel … not found"** — wrong state channel ID, or the bot lacks *View Channel* / *Read Message History* on it. The plugin keeps relaying, but without the standby queue, so make sure no second officer is running at the same time.
+- **"State channel … not found"** — wrong state channel ID, or the bot lacks *View Channel* / *Read Message History* on it. The plugin does not connect until it can see that channel.
 - **Two officers, messages still duplicated** — both must have the **same** state channel ID saved, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.

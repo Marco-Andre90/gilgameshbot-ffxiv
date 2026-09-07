@@ -71,7 +71,7 @@ public sealed class ConfigWindow : Window, IDisposable
         };
         ImGui.TextColored(color, label);
 
-        if (bridge.State == BridgeState.Connected && bridge.PresenceEnabled)
+        if (bridge.State == BridgeState.Connected)
         {
             if (bridge.IsLeader)
             {
@@ -115,11 +115,11 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.InputText("Server (guild) ID", ref guildIdBuffer, 32);
         ImGui.InputText("Channel ID", ref channelIdBuffer, 32);
-        ImGui.InputText("State channel ID (optional)", ref stateChannelIdBuffer, 32);
+        ImGui.InputText("State channel ID", ref stateChannelIdBuffer, 32);
 
         ImGui.TextColored(Grey, "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
-        ImGui.TextColored(Grey, "Hidden admin channel where each running plugin keeps a presence message.");
-        ImGui.TextColored(Grey, "Leave empty if only one officer runs the plugin.");
+        ImGui.TextColored(Grey, "State channel: hidden admin channel where each running plugin keeps a presence message.");
+        ImGui.TextColored(Grey, "Every officer must use the same one.");
 
         if (ImGui.Button("Save Discord settings"))
             SaveDiscordSettings();
@@ -151,11 +151,9 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        var stateChannelText = stateChannelIdBuffer.Trim();
-        ulong stateChannelId = 0;
-        if (stateChannelText.Length > 0 && (!ulong.TryParse(stateChannelText, out stateChannelId) || stateChannelId == 0))
+        if (!ulong.TryParse(stateChannelIdBuffer.Trim(), out var stateChannelId) || stateChannelId == 0)
         {
-            validationMessage = "State channel ID must be a number, or empty.";
+            validationMessage = "State channel ID must be a number.";
             return;
         }
 

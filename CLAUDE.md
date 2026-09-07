@@ -35,7 +35,7 @@ docs/ROADMAP.md                 phases 1–4, decisions, open questions
 
 ## Rules of the road
 
-- **Phase discipline.** We are in Phase 2 (FFXIV → Discord, one FC, several officers: one relays, the rest queue on standby behind per-instance presence messages in an optional state channel). Do not start Phase 3+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
+- **Phase discipline.** We are in Phase 2 (FFXIV → Discord, one FC, several officers: one relays, the rest queue on standby behind per-instance presence messages in a required state channel). Do not start Phase 3+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
 - **Game thread never blocks.** `IChatGui.ChatMessage` runs on the game's main thread: extract + enqueue only. All Discord I/O lives on background tasks in `DiscordBridge`.
 - **Never log or print the bot token.**
 - **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.

@@ -43,7 +43,7 @@ Goal: any number of officers can run the plugin without duplicates, and Online/O
 
 Approach (no server): **a standby queue built from per-instance presence messages in Discord.**
 
-- Each running instance posts **its own** presence message in an optional hidden/admin *state channel*: `🎮 <Character @ World> · beat <n>`. No shared message, so there is nothing to write-race on.
+- Each running instance posts **its own** presence message in a hidden/admin *state channel* (required config): `🎮 <Character @ World> · beat <n>`. No shared message, so there is nothing to write-race on.
 - **Ordering is the message id.** Discord snowflakes are assigned by the server and are monotonic, so the oldest presence message is the head of the queue. Local clocks are never used for ordering.
 - **Heartbeat**: every `HeartbeatSeconds` (default 30) an instance edits its own message, bumping the beat counter so `edited_timestamp` moves.
 - A **failed heartbeat forfeits the slot**: the instance deletes its presence message and posts a new one, which lands at the back of the queue. Retrying the edit instead would let an instance that went quiet long enough for a peer to promote itself return straight to the head of the queue (its snowflake is still the oldest) and relay alongside that peer until the peer's next tick.
@@ -53,7 +53,7 @@ Approach (no server): **a standby queue built from per-instance presence message
 - **Followers drop, never buffer.** A message received while on standby is discarded at enqueue time, and leadership is re-checked again just before sending. Buffering would replay lines the outgoing leader already relayed.
 - **Stale cleanup**: presence messages untouched for more than 10 minutes are debris from crashed instances and may be deleted by anyone. Otherwise an instance only ever edits or deletes *its own* message.
 - **Announcements**: `🟢 Online … via <label>` on a false → true leadership change (first login, clean handoff, takeover after a crash). On clean shutdown the leader deletes its presence message first, then posts `🔴 Offline` only if no other alive instance remains; if a peer is alive it stays quiet and the peer announces itself on its next tick. Followers never announce. Getting our own slot back after a forfeit (nobody else led in between) is not a change of relaying officer and is not announced, so a flaky connection does not spam the channel.
-- `StateChannelId = 0` disables all of the above and keeps Phase 1 behaviour exactly (this instance always relays).
+- The state channel is required. A single-relayer fallback was considered and dropped: the plugin has no released users yet, and one code path is easier to trust than two.
 
 Alternatives considered
 

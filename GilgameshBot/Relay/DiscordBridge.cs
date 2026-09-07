@@ -62,10 +62,7 @@ public sealed class DiscordBridge : IDisposable
 
     public int RelayedCount => Volatile.Read(ref relayedCount);
 
-    /// <summary>True when the standby queue is active (a state channel is configured and resolved).</summary>
-    public bool PresenceEnabled => session?.Coordinator?.Enabled ?? false;
-
-    /// <summary>True when this instance is the one relaying. Meaningless when presence is disabled.</summary>
+    /// <summary>True when this instance is the one relaying.</summary>
     public bool IsLeader => session?.Coordinator?.IsLeader ?? false;
 
     /// <summary>1-based place in the standby queue, 0 while unknown.</summary>
@@ -95,7 +92,7 @@ public sealed class DiscordBridge : IDisposable
 
             if (!config.IsDiscordConfigured)
             {
-                LastError = "Discord is not configured (token, server ID and channel ID are required).";
+                LastError = "Discord is not configured (token, server ID, channel ID and state channel ID are required).";
                 log.Warning("{Error}", LastError);
                 return;
             }
@@ -219,12 +216,15 @@ public sealed class DiscordBridge : IDisposable
 
         var guild = s.Client.GetGuild(config.GuildId);
         var textChannel = guild?.GetTextChannel(config.ChannelId);
+        var stateChannel = guild?.GetTextChannel(config.StateChannelId);
 
-        if (guild is null || textChannel is null)
+        if (guild is null || textChannel is null || stateChannel is null)
         {
             LastError = guild is null
                 ? $"Bot is not a member of server {config.GuildId}. Invite it first."
-                : $"Channel {config.ChannelId} not found in {guild.Name}, or the bot cannot see it.";
+                : textChannel is null
+                    ? $"Channel {config.ChannelId} not found in {guild.Name}, or the bot cannot see it."
+                    : $"State channel {config.StateChannelId} not found in {guild.Name}, or the bot cannot see it.";
             log.Error("{Error}", LastError);
             BeginTeardown(s, announceOffline: false);
             return Task.CompletedTask;
@@ -233,20 +233,6 @@ public sealed class DiscordBridge : IDisposable
         s.TextChannel = textChannel;
         s.Mentions = new MentionResolver(guild, log);
         LastError = null;
-
-        // Optional standby queue. A missing state channel is not fatal: fall back to relaying
-        // unconditionally, which is exactly the Phase 1 behaviour.
-        SocketTextChannel? stateChannel = null;
-        if (config.StateChannelId != 0)
-        {
-            stateChannel = guild.GetTextChannel(config.StateChannelId);
-            if (stateChannel is null)
-            {
-                LastError = $"State channel {config.StateChannelId} not found in {guild.Name}, or the bot cannot see it. "
-                            + "Relaying without the standby queue.";
-                log.Error("{Error}", LastError);
-            }
-        }
 
         lock (gate)
         {
@@ -269,16 +255,7 @@ public sealed class DiscordBridge : IDisposable
         log.Information("Connected to Discord as {Bot}; relaying to #{Channel} in {Guild}.",
             s.Client.CurrentUser.Username, textChannel.Name, guild.Name);
 
-        // Ready fires on a fresh identify (first connect, or a session that could not be
-        // resumed). A resumed reconnect does NOT raise Ready — see OnConnectedAsync.
-        // Announce Online only once per session.
-        // With the standby queue on, Online is announced by OnLeadershipChanged instead.
-        if (config.AnnounceOnlineOffline && !s.AnnouncedOnline && s.Coordinator is { Enabled: false })
-        {
-            s.AnnouncedOnline = true; // claim first so a fast reconnect can't announce twice
-            _ = Task.Run(() => AnnounceOnlineAsync(s, textChannel)); // don't block the gateway task
-        }
-
+        // Online is announced by OnLeadershipChanged once this instance is the one relaying.
         return Task.CompletedTask;
     }
 
@@ -486,7 +463,7 @@ public sealed class DiscordBridge : IDisposable
         // Hand off: drop our presence message so a peer can take the head of the queue, and find
         // out whether anyone is left. Own short-lived token - the session's is already cancelled.
         var peerAlive = false;
-        if (s.Coordinator is { Enabled: true } coordinator)
+        if (s.Coordinator is { } coordinator)
         {
             using var resignCts = new CancellationTokenSource(ResignTimeout);
             try
