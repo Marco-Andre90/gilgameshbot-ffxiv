@@ -20,6 +20,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private string tokenBuffer;
     private string guildIdBuffer;
     private string channelIdBuffer;
+    private string stateChannelIdBuffer;
     private bool showToken;
     private string? validationMessage;
 
@@ -31,8 +32,9 @@ public sealed class ConfigWindow : Window, IDisposable
         tokenBuffer = config.BotToken;
         guildIdBuffer = config.GuildId == 0 ? string.Empty : config.GuildId.ToString();
         channelIdBuffer = config.ChannelId == 0 ? string.Empty : config.ChannelId.ToString();
+        stateChannelIdBuffer = config.StateChannelId == 0 ? string.Empty : config.StateChannelId.ToString();
 
-        Size = new Vector2(480, 420);
+        Size = new Vector2(480, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -69,6 +71,22 @@ public sealed class ConfigWindow : Window, IDisposable
         };
         ImGui.TextColored(color, label);
 
+        if (bridge.State == BridgeState.Connected)
+        {
+            if (bridge.IsLeader)
+            {
+                ImGui.TextColored(Green, "Relaying (leader)");
+            }
+            else
+            {
+                var position = bridge.QueuePosition;
+                var leader = bridge.LeaderLabel ?? "unknown";
+                ImGui.TextColored(Yellow, position > 0
+                    ? $"Standby - #{position} in queue, leader: {leader}"
+                    : $"Standby - leader: {leader}");
+            }
+        }
+
         ImGui.TextUnformatted($"Relayed this session: {bridge.RelayedCount}   Queued: {bridge.QueuedCount}");
 
         if (bridge.LastError is { } error)
@@ -97,8 +115,11 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.InputText("Server (guild) ID", ref guildIdBuffer, 32);
         ImGui.InputText("Channel ID", ref channelIdBuffer, 32);
+        ImGui.InputText("State channel ID", ref stateChannelIdBuffer, 32);
 
         ImGui.TextColored(Grey, "Enable Developer Mode in Discord, then right-click the server / channel → Copy ID.");
+        ImGui.TextColored(Grey, "State channel: hidden admin channel where each running plugin keeps a presence message.");
+        ImGui.TextColored(Grey, "Every officer must use the same one.");
 
         if (ImGui.Button("Save Discord settings"))
             SaveDiscordSettings();
@@ -130,9 +151,16 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
+        if (!ulong.TryParse(stateChannelIdBuffer.Trim(), out var stateChannelId) || stateChannelId == 0)
+        {
+            validationMessage = "State channel ID must be a number.";
+            return;
+        }
+
         config.BotToken = tokenBuffer.Trim();
         config.GuildId = guildId;
         config.ChannelId = channelId;
+        config.StateChannelId = stateChannelId;
         config.Save();
         validationMessage = "Saved. Reconnect to apply.";
     }
@@ -182,5 +210,23 @@ public sealed class ConfigWindow : Window, IDisposable
             config.SendDelayMs = Math.Clamp(delay, 0, 5000);
             config.Save();
         }
+
+        var heartbeat = config.HeartbeatSeconds;
+        if (ImGui.InputInt("Heartbeat (s)", ref heartbeat, 5, 15))
+        {
+            config.HeartbeatSeconds = Math.Clamp(heartbeat, 10, 120);
+            config.StaleSeconds = Math.Clamp(config.StaleSeconds, config.HeartbeatSeconds * 2, 600);
+            config.Save();
+        }
+
+        var stale = config.StaleSeconds;
+        if (ImGui.InputInt("Stale after (s)", ref stale, 10, 30))
+        {
+            config.StaleSeconds = Math.Clamp(stale, Math.Clamp(config.HeartbeatSeconds, 10, 120) * 2, 600);
+            config.Save();
+        }
+
+        ImGui.TextColored(Grey, "Standby queue only: how often this instance proves it is alive,");
+        ImGui.TextColored(Grey, "and how long a silent instance keeps its place in the queue.");
     }
 }

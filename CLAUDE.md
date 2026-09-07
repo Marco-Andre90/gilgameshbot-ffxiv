@@ -27,6 +27,7 @@ GilgameshBot/
   Relay/DiscordBridge           gateway lifecycle, Online/Offline, outbound queue + worker
   Relay/MentionResolver         @name → <@id> / <@&id> via guild member search; returns the allow-list of IDs
   Relay/MessageFormatter        markdown escaping, mass-mention neutralising, 2000-char cap
+  Relay/PresenceCoordinator     standby queue: own presence message + heartbeat, leader = oldest alive
   GilgameshBot.json             plugin manifest (mirrors the csproj properties)
   Windows/ConfigWindow          ImGui settings + status
 docs/ROADMAP.md                 phases 1–4, decisions, open questions
@@ -34,10 +35,11 @@ docs/ROADMAP.md                 phases 1–4, decisions, open questions
 
 ## Rules of the road
 
-- **Phase discipline.** We are in Phase 1 (FFXIV → Discord, one FC, one officer). Do not start Phase 2+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
+- **Phase discipline.** We are in Phase 2 (FFXIV → Discord, one FC, several officers: one relays, the rest queue on standby behind per-instance presence messages in a required state channel). Phase 3 (distribution, plug & play setup) is next; do not start Phase 4+ features unless asked; record ideas in `docs/ROADMAP.md` instead.
 - **Game thread never blocks.** `IChatGui.ChatMessage` runs on the game's main thread: extract + enqueue only. All Discord I/O lives on background tasks in `DiscordBridge`.
 - **Never log or print the bot token.**
 - **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.
+- **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them.
 - **`Disconnect()` is fire-and-forget.** Only `Dispose()` waits (bounded) so the Offline notice gets out during unload.
 - **Docs split:** README describes the present (setup/run for the shipped phase); the future goes in `docs/ROADMAP.md`.
 - Namespace is `GilgameshBot.Relay`, not `GilgameshBot.Discord`, to avoid clashing with the `Discord` root namespace of Discord.Net.

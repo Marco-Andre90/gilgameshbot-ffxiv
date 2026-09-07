@@ -16,7 +16,7 @@ A Free Company (FC) spread across Discord and the game should feel like one conv
 
 ## Phases
 
-### Phase 1 — POC: FFXIV → Discord *(current)*
+### Phase 1 — POC: FFXIV → Discord *(shipped, v0.1.x)*
 
 Scope
 
@@ -32,34 +32,58 @@ Done when
 
 - An officer can build, install as a dev plugin, configure, and see FC chat appear in the channel with working mentions.
 
-Known gaps (by design)
+Known gaps (by design, addressed in Phase 2)
 
 - Two officers online → duplicated messages.
 - Token stored in plain text in the plugin config.
 
-### Phase 2 — Multiple officers, one FC
+### Phase 2 — Multiple officers, one FC *(shipped)*
 
-Goal: any number of officers can run the plugin without duplicates, and Online/Offline reflects "at least one officer online".
+Goal: any number of officers can run the plugin without duplicates, and Online/Offline reflects "someone is relaying" vs. "nobody is".
 
-Approach (no server): **leader election through Discord itself.**
+Approach (no server): **a standby queue built from per-instance presence messages in Discord.**
 
-- The bot keeps a *state message* per FC in a hidden/admin channel: `leader=<character>, heartbeat=<timestamp>, session=<random id>`.
-- The leader edits the heartbeat every ~30 s. Followers only watch; they do not relay.
-- If the heartbeat is older than ~90 s, a follower claims leadership by editing the message with its own id, waits a few seconds, re-reads, and only starts relaying if its id is still there (resolves two followers claiming at once).
-- On clean shutdown the leader hands off (clears the heartbeat) so a follower takes over immediately.
-- Online/Offline announcements move from "this plugin connected" to "leadership changed from none → someone / someone → none".
+- Each running instance posts **its own** presence message in a hidden/admin *state channel* (required config): `🎮 <Character @ World> · beat <n>`. No shared message, so there is nothing to write-race on.
+- **Ordering is the message id.** Discord snowflakes are assigned by the server and are monotonic, so the oldest presence message is the head of the queue. Local clocks are never used for ordering.
+- **Heartbeat**: every `HeartbeatSeconds` (default 30) an instance edits its own message, bumping the beat counter so `edited_timestamp` moves.
+- A **failed heartbeat forfeits the slot**: the instance deletes its presence message and posts a new one, which lands at the back of the queue. Retrying the edit instead would let an instance that went quiet long enough for a peer to promote itself return straight to the head of the queue (its snowflake is still the oldest) and relay alongside that peer until the peer's next tick.
+- **Alive** = the message's last edit is younger than `StaleSeconds` (default 90) relative to *server* time, where server time is the newest edit timestamp seen in the channel. Comparing server timestamps against each other means clock skew between officers' PCs is irrelevant.
+- **Leader** = the oldest alive presence message. Leadership is a pure function of the channel contents, recomputed on every tick by every instance — there is no claim protocol and no state machine.
+- **Lease**: an instance relays only while it is leader *and* its own last heartbeat succeeded within `StaleSeconds` (measured with a monotonic local tick count). A leader that loses its connection stands itself down before any peer can consider it stale, so a takeover can never produce duplicates. The cost is a relay gap of up to ~`StaleSeconds` after a crash; that is accepted.
+- **Followers drop, never buffer.** A message received while on standby is discarded at enqueue time, and leadership is re-checked again just before sending. Buffering would replay lines the outgoing leader already relayed.
+- **Stale cleanup**: presence messages untouched for more than 10 minutes are debris from crashed instances and may be deleted by anyone. Otherwise an instance only ever edits or deletes *its own* message.
+- **Announcements**: `🟢 Online … via <label>` on a false → true leadership change (first login, clean handoff, takeover after a crash). On clean shutdown the leader deletes its presence message first, then posts `🔴 Offline` only if no other alive instance remains; if a peer is alive it stays quiet and the peer announces itself on its next tick. Followers never announce. Getting our own slot back after a forfeit (nobody else led in between) is not a change of relaying officer and is not announced, so a flaky connection does not spam the channel.
+- The state channel is required. A single-relayer fallback was considered and dropped: the plugin has no released users yet, and one code path is easier to trust than two.
 
 Alternatives considered
 
+- *One shared state message with a claim protocol* (the original plan: `leader=…, heartbeat=…, session=<random id>`; a follower claims by editing it with its own id, waits, re-reads and only relays if its id survived) — dropped. Edits to a shared message are last-write-wins, so two concurrent claims genuinely race and the "write, wait, re-read" dance only narrows the window instead of closing it. It is also more code and more states than a leader computed as a pure function over per-instance messages, which cannot race because every instance writes only its own message.
 - *Content-hash dedup on the Discord side* — impossible without a server; each plugin would race to post.
 - *Relay server* — cleaner (dedup, heartbeats, token stays server-side) but needs hosting. Deferred; see "Optional: relay server" below.
 
-Open questions
+Resolved questions
 
-- Handoff latency vs. heartbeat cost (Discord edit rate limits are per-channel; 30 s is safe).
-- What happens to a message received during a leader change (accept a rare duplicate, or buffer briefly and dedupe on sender+text+minute).
+- *Handoff latency vs. heartbeat cost*: 30 s heartbeat / 90 s stale. Edits are one REST call per instance per 30 s in a single channel, far below Discord's per-channel edit limits; both are configurable and clamped (heartbeat 10–120 s, stale ≥ 2× heartbeat and ≤ 600 s).
+- *A message received during a leader change*: it is dropped. The lease guarantees the outgoing leader stopped relaying before the incoming one starts, so a short gap replaces the duplicate. Buffering plus dedup on sender+text+minute was rejected as more machinery for a worse failure mode (a burst of late duplicates).
 
-### Phase 3 — Multiple FC branches
+### Phase 3 — Distribution and plug & play setup *(current)*
+
+Goal: an FC officer with no technical background installs the plugin from the plugin installer and is relaying within minutes, without hunting for IDs.
+
+Distribution
+
+- Publish a Dalamud **custom plugin repository** (`repo.json` pluginmaster in this repo, pointing at the `latest.zip` of the GitHub Release). Officers add the repo URL once in `/xlsettings` → Experimental → Custom Plugin Repositories and install/update GilgameshBot from `/xlplugins` like any other plugin. The release workflow must regenerate `repo.json` on every release.
+- Keep the dev-plugin path documented for contributors only.
+
+Setup
+
+- **Setup code** instead of five fields: the officer who configures the bot exports one string (base64 of the shareable settings: token, server, relay channel, state channel, heartbeat/stale) with an *Export setup code* button; every other officer pastes it into an *Import setup code* field. Clipboard only, no files on disk. The code contains the token, so the README says to share it by private message and to reset the token if it leaks — the same rule as today.
+- **Pickers instead of IDs** for the first officer: after pasting the token and connecting, choose server, relay channel and state channel from dropdowns populated from the bot's guilds and channels. Developer Mode and *Copy ID* stop being required.
+- First-run guidance in the settings window: which step is missing, what to do next, and clear errors for missing channel permissions.
+
+Rejected: importing a `.txt`/`.json` file. It needs a file dialog, leaves files containing the token on disk, and is not better than the plugin config file that Dalamud already writes.
+
+### Phase 4 — Multiple FC branches
 
 Goal: one bot, one plugin, N FC branches (e.g. Kraken and Famfrit), each with its own channel.
 
@@ -68,7 +92,7 @@ Goal: one bot, one plugin, N FC branches (e.g. Kraken and Famfrit), each with it
 - An officer with characters in two branches needs no extra setup: the branch is picked from the logged-in character.
 - Adding a branch = adding a row to the table (later: `/gilgamesh branch add`).
 
-### Phase 4 — Discord → FFXIV ("Discord Lala")
+### Phase 5 — Discord → FFXIV ("Discord Lala")
 
 Goal: Discord members can talk into FC chat through a dedicated relay character.
 
@@ -102,9 +126,12 @@ If hosting ever becomes available, a small relay service replaces the Discord-si
 | 4 | Discord.Net 3.20.x | Mature, .NET 10 support, used by the existing DiscordBridge plugin without workarounds. |
 | 5 | Online/Offline messages *and* presence | Messages for humans reading the channel; presence for the crash case. |
 | 6 | Read path first, write path last | Sending chat is the fragile, ToS-sensitive part; validate everything else first. |
-| 7 | One branch at a time | Keep the POC small; branch table comes in Phase 3. |
+| 7 | One branch at a time | Keep the POC small; branch table comes in Phase 4. |
 | 8 | Markdown escaped, mass mentions blocked | Players must not be able to format or ping the whole server from game chat. |
 | 9 | Docs split: README (now) / ROADMAP (later) | Keeps setup instructions accurate for the shipped phase. |
+| 10 | One presence message *per instance* instead of one shared state message | Each instance only ever writes its own message, so concurrent claims cannot race; leadership becomes a pure function of the channel (oldest alive snowflake wins) instead of a claim state machine. |
+| 11 | Lease: a leader stops relaying as soon as it cannot heartbeat | Guarantees the old leader is silent before a peer takes over. Trades a relay gap of up to ~StaleSeconds after a crash for never duplicating a line. |
+| 12 | Followers drop messages, never buffer them | On a clean handoff the previous leader already relayed them; replaying a backlog on promotion would duplicate exactly the lines a standby queue exists to avoid. |
 
 ## Reference projects
 

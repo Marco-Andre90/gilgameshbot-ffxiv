@@ -34,6 +34,9 @@ public enum BridgeState
 public sealed class DiscordBridge : IDisposable
 {
     private static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>Budget for the two REST calls of a clean handoff, inside <see cref="DisposeTimeout"/>.</summary>
+    private static readonly TimeSpan ResignTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StaleMessageAge = TimeSpan.FromMinutes(5);
     private const int QueueCapacity = 200;
 
@@ -59,6 +62,15 @@ public sealed class DiscordBridge : IDisposable
 
     public int RelayedCount => Volatile.Read(ref relayedCount);
 
+    /// <summary>True when this instance is the one relaying.</summary>
+    public bool IsLeader => session?.Coordinator?.IsLeader ?? false;
+
+    /// <summary>1-based place in the standby queue, 0 while unknown.</summary>
+    public int QueuePosition => session?.Coordinator?.QueuePosition ?? 0;
+
+    /// <summary>Character label of the instance currently relaying, if known.</summary>
+    public string? LeaderLabel => session?.Coordinator?.LeaderLabel;
+
     public int QueuedCount
     {
         get
@@ -80,7 +92,7 @@ public sealed class DiscordBridge : IDisposable
 
             if (!config.IsDiscordConfigured)
             {
-                LastError = "Discord is not configured (token, server ID and channel ID are required).";
+                LastError = "Discord is not configured (token, server ID, channel ID and state channel ID are required).";
                 log.Warning("{Error}", LastError);
                 return;
             }
@@ -148,6 +160,14 @@ public sealed class DiscordBridge : IDisposable
             return;
         }
 
+        // Standby: another officer is relaying, so drop instead of buffering - replaying the
+        // backlog after a handoff would duplicate what the previous leader already sent.
+        if (s.Coordinator is { } coordinator && !coordinator.CanRelay)
+        {
+            log.Debug("Dropped FC message from {Sender}: this instance is on standby.", message.SenderName);
+            return;
+        }
+
         // Bounded + DropOldest: a long reconnect never builds an unbounded backlog.
         s.Queue.Writer.TryWrite(message);
     }
@@ -196,12 +216,15 @@ public sealed class DiscordBridge : IDisposable
 
         var guild = s.Client.GetGuild(config.GuildId);
         var textChannel = guild?.GetTextChannel(config.ChannelId);
+        var stateChannel = guild?.GetTextChannel(config.StateChannelId);
 
-        if (guild is null || textChannel is null)
+        if (guild is null || textChannel is null || stateChannel is null)
         {
             LastError = guild is null
                 ? $"Bot is not a member of server {config.GuildId}. Invite it first."
-                : $"Channel {config.ChannelId} not found in {guild.Name}, or the bot cannot see it.";
+                : textChannel is null
+                    ? $"Channel {config.ChannelId} not found in {guild.Name}, or the bot cannot see it."
+                    : $"State channel {config.StateChannelId} not found in {guild.Name}, or the bot cannot see it.";
             log.Error("{Error}", LastError);
             BeginTeardown(s, announceOffline: false);
             return Task.CompletedTask;
@@ -216,21 +239,23 @@ public sealed class DiscordBridge : IDisposable
             if (!IsCurrent(s) || State == BridgeState.Disconnecting)
                 return Task.CompletedTask; // torn down while we were resolving the channel
 
+            // Ready fires again after a failed resume, so only ever build one coordinator per
+            // session: two would mean two presence messages and two heartbeat loops.
+            if (s.Coordinator is null)
+            {
+                var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, characterLabelProvider);
+                coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
+                s.Coordinator = coordinator;
+                s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
+            }
+
             State = BridgeState.Connected;
         }
 
         log.Information("Connected to Discord as {Bot}; relaying to #{Channel} in {Guild}.",
             s.Client.CurrentUser.Username, textChannel.Name, guild.Name);
 
-        // Ready fires on a fresh identify (first connect, or a session that could not be
-        // resumed). A resumed reconnect does NOT raise Ready — see OnConnectedAsync.
-        // Announce Online only once per session.
-        if (config.AnnounceOnlineOffline && !s.AnnouncedOnline)
-        {
-            s.AnnouncedOnline = true; // claim first so a fast reconnect can't announce twice
-            _ = Task.Run(() => AnnounceOnlineAsync(s, textChannel)); // don't block the gateway task
-        }
-
+        // Online is announced by OnLeadershipChanged once this instance is the one relaying.
         return Task.CompletedTask;
     }
 
@@ -283,6 +308,29 @@ public sealed class DiscordBridge : IDisposable
         }
     }
 
+    /// <summary>
+    /// Announces Online when this instance becomes the relaying one - first login, clean handoff
+    /// or takeover after a crash all arrive here. Followers never announce.
+    /// </summary>
+    private void OnLeadershipChanged(Session s, bool leader, bool reclaim)
+    {
+        if (!leader || !IsCurrent(s) || s.Cts.IsCancellationRequested)
+            return;
+
+        log.Information("This instance is now relaying Free Company chat.");
+
+        if (!config.AnnounceOnlineOffline || s.TextChannel is not { } channel)
+            return;
+
+        // A forfeit + re-post with nobody else leading in between is not a change of relaying
+        // officer as far as the channel is concerned: don't announce Online on every blip.
+        if (reclaim && s.AnnouncedOnline)
+            return;
+
+        s.AnnouncedOnline = true; // claim first, so a retry cannot announce twice
+        _ = Task.Run(() => AnnounceOnlineAsync(s, channel)); // never stall the heartbeat loop
+    }
+
     private Task OnDisconnectedAsync(Session s, Exception exception)
     {
         if (!IsCurrent(s))
@@ -322,6 +370,13 @@ public sealed class DiscordBridge : IDisposable
                 // Wait for the channel to be resolved (first Ready) or for a reconnect to finish.
                 while (s.TextChannel is null || State != BridgeState.Connected)
                     await Task.Delay(500, ct);
+
+                // Leadership may have been lost between Enqueue and now. Drop, never buffer.
+                if (s.Coordinator is { } coordinator && !coordinator.CanRelay)
+                {
+                    log.Debug("Skipped an FC message from {Sender}: this instance is on standby.", message.SenderName);
+                    continue;
+                }
 
                 if (DateTimeOffset.Now - message.ReceivedAt > StaleMessageAge)
                 {
@@ -400,7 +455,31 @@ public sealed class DiscordBridge : IDisposable
             try { await worker; } catch { /* worker logs its own errors */ }
         }
 
-        if (announceOffline && s.AnnouncedOnline && config.AnnounceOnlineOffline && s.TextChannel is { } ch)
+        if (s.Presence is { } presence)
+        {
+            try { await presence; } catch { /* the coordinator logs its own errors */ }
+        }
+
+        // Hand off: drop our presence message so a peer can take the head of the queue, and find
+        // out whether anyone is left. Own short-lived token - the session's is already cancelled.
+        var peerAlive = false;
+        if (s.Coordinator is { } coordinator)
+        {
+            using var resignCts = new CancellationTokenSource(ResignTimeout);
+            try
+            {
+                peerAlive = await coordinator.ResignAsync(resignCts.Token);
+            }
+            catch (Exception ex)
+            {
+                log.Debug(ex, "Handing off the presence message failed.");
+            }
+        }
+
+        if (peerAlive)
+            log.Information("Another officer is still relaying; skipping the Offline notice.");
+
+        if (announceOffline && !peerAlive && s.AnnouncedOnline && config.AnnounceOnlineOffline && s.TextChannel is { } ch)
         {
             try
             {
@@ -451,6 +530,8 @@ public sealed class DiscordBridge : IDisposable
         public Task? Worker { get; set; }
         public SocketTextChannel? TextChannel { get; set; }
         public MentionResolver? Mentions { get; set; }
+        public PresenceCoordinator? Coordinator { get; set; }
+        public Task? Presence { get; set; }
         public bool AnnouncedOnline { get; set; }
     }
 }
