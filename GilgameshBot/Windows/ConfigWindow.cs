@@ -96,6 +96,10 @@ public sealed class ConfigWindow : Window, IDisposable
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
         selectStatusTab = false;
 
+        // Dalamud's default theme draws buttons and fields without a frame border, which makes
+        // them hard to tell from plain text; give every framed widget in this window a 1px edge.
+        using var frameBorder = ImRaii.PushStyle(ImGuiStyleVar.FrameBorderSize, 1f * ImGuiHelpers.GlobalScale);
+
         using var tabs = ImRaii.TabBar("##gilgameshTabs");
         if (!tabs)
             return;
