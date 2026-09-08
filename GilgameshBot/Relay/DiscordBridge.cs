@@ -356,14 +356,18 @@ public sealed class DiscordBridge : IDisposable
         if (!leader || !IsCurrent(s) || s.Cts.IsCancellationRequested)
             return;
 
+        // This instance announces "Online" at most once per session. It was already announced,
+        // so a later regain — a handoff bouncing back, or leadership churn from a flapping peer —
+        // must not post it again. The bot's Discord presence already shows it stays online.
+        if (s.AnnouncedOnline)
+        {
+            log.Debug("Regained leadership; Online was already announced this session.");
+            return;
+        }
+
         log.Information("This instance is now relaying Free Company chat.");
 
         if (!config.AnnounceOnlineOffline || s.TextChannel is not { } channel)
-            return;
-
-        // A forfeit + re-post with nobody else leading in between is not a change of relaying
-        // officer as far as the channel is concerned: don't announce Online on every blip.
-        if (reclaim && s.AnnouncedOnline)
             return;
 
         s.AnnouncedOnline = true; // claim first, so a retry cannot announce twice
