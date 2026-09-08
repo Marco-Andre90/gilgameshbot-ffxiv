@@ -48,6 +48,13 @@ public sealed class PresenceCoordinator
     /// <summary>Presence messages older than this are debris from crashed instances.</summary>
     private static readonly TimeSpan CleanupAge = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// How many consecutive fetches must miss our own message before we accept it as really gone.
+    /// A single miss is almost always Discord's message list being briefly eventually-consistent;
+    /// re-posting on it would move us to a new snowflake and disturb stable leadership.
+    /// </summary>
+    private const int OwnMissingConfirmations = 3;
+
     private readonly Configuration config;
     private readonly IPluginLog log;
     private readonly DiscordSocketClient client;
@@ -61,6 +68,7 @@ public sealed class PresenceCoordinator
     private int beat;
     private long lastHeartbeatOkTicks;
     private DateTimeOffset lastServerNow;
+    private int ownMissingStreak;
 
     /// <summary>Every presence message id this instance has ever posted (forfeits re-post under a new id).</summary>
     private readonly HashSet<ulong> ownIds = [];
@@ -353,14 +361,28 @@ public sealed class PresenceCoordinator
 
         if (own is not null && presence.All(m => m.Id != own.Id))
         {
-            // Someone deleted our message. Re-post: a new snowflake puts us at the back of the
-            // queue, which is acceptable and much simpler than trying to keep the old slot.
-            log.Warning("This instance's presence message disappeared; re-posting at the back of the queue.");
+            // Our message is not in this fetch. A GetMessages call is eventually-consistent and
+            // can briefly omit a message we just posted or edited, so a single miss is not proof
+            // of deletion — and a real deletion is caught anyway by the very next heartbeat edit
+            // failing. Keep the slot and the previous leadership decision until several fetches in
+            // a row miss it; re-posting on a transient miss is what starts leadership churn and a
+            // storm of "Online" announcements.
+            if (++ownMissingStreak < OwnMissingConfirmations)
+            {
+                log.Debug("Presence fetch did not include this instance's message; treating as transient ({Streak}).",
+                    ownMissingStreak);
+                return;
+            }
+
+            log.Warning("This instance's presence message is gone; re-posting at the back of the queue.");
+            ownMissingStreak = 0;
             own = null;
             SetLeadership(false);
             await PostOwnAsync(ct);
             return;
         }
+
+        ownMissingStreak = 0;
 
         var stale = TimeSpan.FromSeconds(StaleSeconds);
         var alive = presence
