@@ -27,7 +27,8 @@ GilgameshBot/
   Chat/FreeCompanyChatListener  IChatGui.ChatMessage → filter FreeCompany → enqueue
   Chat/OutboundMessage          record passed from game thread to Discord worker
   Relay/DiscordBridge           gateway lifecycle, Online/Offline, outbound queue + worker
-  Relay/MentionResolver         @name → <@id> / <@&id> via guild member search; returns the allow-list of IDs
+  Relay/GuildMemberSearch       exact-match member lookup (username / global name / nickname) shared by mentions and DM delivery
+  Relay/MentionResolver         @name → <@id> / <@&id> via GuildMemberSearch; returns the allow-list of IDs
   Relay/MessageFormatter        markdown escaping, mass-mention neutralising, 2000-char cap
   Relay/PresenceCoordinator     standby queue: own presence message + heartbeat, leader = oldest alive
   Relay/SlashCommands           /setupcode + /relaystatus: guild registration, leader gate
@@ -39,9 +40,9 @@ GilgameshBot/
 
 ## How it works
 
-- **Branches.** N Free Company branches, one per (home world, FC name), each with its own Discord server, relay channel and state channel. The branch is resolved from the logged-in character, so an officer with characters in several branches configures nothing extra.
-- **Presence queue.** Several officers may run the plugin at once. Each instance keeps its own presence message in its branch's state channel and edits it every heartbeat; the oldest alive message is the leader and the only instance that relays. A leader also holds a lease — it stops relaying once its own heartbeat is older than the stale window — so a takeover can never duplicate messages. Followers drop what they receive.
-- **Setup code.** A `GB2:` string (base64url JSON) carrying the token and every branch, exported to and imported from the clipboard, so one officer configures all the others.
+- **Branches.** N Free Company branches, one per (home world, FC name), each with its own Discord server, relay channel and state channel. The branch is resolved from the logged-in character, so a member with characters in several branches configures nothing extra.
+- **Presence queue.** Several members may run the plugin at once. Each instance keeps its own presence message, tagged with its branch's relay channel id, in the state channel (shared by every branch on the server, never the relay channel itself) and edits it every heartbeat; the oldest alive message is the leader and the only instance that relays. A leader also holds a lease — it stops relaying once its own heartbeat is older than the stale window — so a takeover can never duplicate messages. Followers drop what they receive.
+- **Setup code.** A `GB2:` string (base64url JSON) carrying the token and every branch, handed over by Discord DM (`/gilga send`, `/setupcode`; receipt on import, timed expiry) or the clipboard, so one member configures all the others.
 - **Slash commands.** `/setupcode` (DMs the invoker a setup code, same delivery as `/gilga send`) and `/relaystatus` (who is relaying, how many on standby). Registered per branch guild on Ready, after the channel resolution, with `BulkOverwriteApplicationCommandAsync` — and only when what the guild already has differs, because the owner's per-role grants hang off the command ids. Every connected instance receives every interaction; only the leader of the branch whose `GuildId` matches answers. Who may run either command is decided by Discord's command permissions alone (registered as Manage Server; the owner opens them to roles under Integrations). A code fetched with `/setupcode` lives 5 minutes unimported, one sent with `/gilga send` 24 hours.
 - **Distribution.** A custom plugin repository: `.github/workflows/release.yml` builds on merge into `release` and attaches the versioned zip, `latest.zip` and a generated `repo.json` to the GitHub Release; the repository URL is the `releases/latest/download/repo.json` redirect.
 
