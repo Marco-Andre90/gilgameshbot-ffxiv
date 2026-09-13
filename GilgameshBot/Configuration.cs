@@ -10,9 +10,9 @@ namespace GilgameshBot;
 /// <remarks>
 /// The matching key is <see cref="World"/> + <see cref="FcName"/>, compared trimmed and
 /// case-insensitively. Free Company <em>names</em> are unique on a world; tags are not, so
-/// <see cref="FcTag"/> is only a human label and a secondary check. Each branch must have its
-/// <em>own</em> state channel: two branches sharing one would make their leaders contend and
-/// silence one of the two Free Companies.
+/// <see cref="FcTag"/> is only a human label and a secondary check. Branches on the same Discord
+/// server may share one state channel (presence messages are tagged with the relay channel id);
+/// the state channel must never be the relay channel itself.
 /// </remarks>
 [Serializable]
 public sealed class FcBranch
@@ -43,7 +43,8 @@ public sealed class FcBranch
 
     /// <summary>
     /// Hidden/admin channel where every instance relaying this branch keeps a presence message,
-    /// so that exactly one of them relays and the others queue up. One per branch.
+    /// so that exactly one of them relays and the others queue up. May be shared by every
+    /// branch on the server; must differ from <see cref="ChannelId"/>.
     /// </summary>
     public ulong StateChannelId { get; set; }
 
