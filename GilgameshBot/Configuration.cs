@@ -107,6 +107,9 @@ public sealed class SentSetupCode
     public string To { get; set; } = string.Empty;
 
     public DateTime SentAtUtc { get; set; }
+
+    /// <summary>When the sending plugin deletes the DM if it was not imported: 24 h after an in-game send, 5 min after /setupcode.</summary>
+    public DateTime ExpiresAtUtc { get; set; }
 }
 
 /// <summary>
@@ -147,7 +150,7 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>
     /// Setup codes handed out by DM that have not been imported yet. The plugin deletes each of
-    /// them 24 hours after it was sent, and on <c>/gilga revoke</c>.
+    /// them once <see cref="SentSetupCode.ExpiresAtUtc"/> passes, and on <c>/gilga revoke</c>.
     /// </summary>
     /// <remarks>
     /// Replaced wholesale rather than mutated in place: the settings window enumerates it on the

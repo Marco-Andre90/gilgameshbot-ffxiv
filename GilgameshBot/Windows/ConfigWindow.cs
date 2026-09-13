@@ -281,6 +281,8 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         SectionGap();
+        DrawSlashCommandSettings();
+        SectionGap();
         DrawBranchTable();
         SectionGap();
         DrawBranchEditor();
@@ -290,6 +292,19 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGuiHelpers.ScaledDummy(4);
             TextColoured(Yellow, msg);
         }
+    }
+
+    /// <summary>The bot's slash commands. Who may use them is decided in Discord, not here.</summary>
+    private static void DrawSlashCommandSettings()
+    {
+        SectionHeader("Discord commands");
+
+        TextWrappedColoured(Grey,
+            "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes) "
+            + "and see who is relaying with /relaystatus. Both only work while at least one member's plugin is connected.");
+        ImGuiHelpers.ScaledDummy(2);
+        TextWrappedColoured(Grey,
+            "Choose which roles may use them in Server Settings → Integrations → GilgameshBot → Command permissions.");
     }
 
     private void DrawBranchTable()
@@ -678,7 +693,7 @@ public sealed class ConfigWindow : Window, IDisposable
             foreach (var entry in sent)
             {
                 var age = now - entry.SentAtUtc;
-                var state = age >= SetupCodeDelivery.Lifetime ? "expired" : "pending";
+                var state = now >= entry.ExpiresAtUtc ? "expired" : "pending";
                 var to = entry.To.Length > 0 ? entry.To : "someone";
                 TextColoured(Grey, $"{to} · {DescribeAge(age)} · {state}");
             }
