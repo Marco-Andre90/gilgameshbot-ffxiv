@@ -86,6 +86,40 @@ public sealed class FcBranch
 }
 
 /// <summary>
+/// A setup code this officer handed to somebody by Discord DM, remembered so the plugin can
+/// delete the message once it expires (or on <c>/gilga revoke</c>).
+/// </summary>
+/// <remarks>
+/// Only the pointer to the message is stored — never the code itself, which lives in the DM and
+/// in nothing else.
+/// </remarks>
+[Serializable]
+public sealed class SentSetupCode
+{
+    /// <summary>The DM channel the code was sent to.</summary>
+    public ulong ChannelId { get; set; }
+
+    /// <summary>The message carrying the code.</summary>
+    public ulong MessageId { get; set; }
+
+    /// <summary>Display name of the member it was sent to, for the settings list.</summary>
+    public string To { get; set; } = string.Empty;
+
+    public DateTime SentAtUtc { get; set; }
+}
+
+/// <summary>
+/// Where the DM that carried the setup code this plugin imported lives, so it can be replaced
+/// with a receipt once the token is proven to work. Set by an imported code, cleared afterwards.
+/// </summary>
+[Serializable]
+public sealed class ReceiptPointer
+{
+    public ulong ChannelId { get; set; }
+    public ulong MessageId { get; set; }
+}
+
+/// <summary>
 /// Plugin settings. Persisted by Dalamud as JSON in
 /// %AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json.
 /// </summary>
@@ -109,6 +143,22 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>The Free Company branches this bot serves, one per (home world, FC name).</summary>
     public List<FcBranch> Branches { get; set; } = [];
+
+    /// <summary>
+    /// Setup codes handed out by DM that have not been imported yet. The plugin deletes each of
+    /// them 24 hours after it was sent, and on <c>/gilga revoke</c>.
+    /// </summary>
+    /// <remarks>
+    /// Replaced wholesale rather than mutated in place: the settings window enumerates it on the
+    /// draw thread while the expiry sweep runs on a background task.
+    /// </remarks>
+    public List<SentSetupCode> SentSetupCodes { get; set; } = [];
+
+    /// <summary>
+    /// The DM this plugin's settings were imported from, waiting to be replaced with a receipt
+    /// on the first connect that proves the token works. Null when there is nothing to scrub.
+    /// </summary>
+    public ReceiptPointer? PendingReceipt { get; set; }
 
     // --- Behaviour ---
 

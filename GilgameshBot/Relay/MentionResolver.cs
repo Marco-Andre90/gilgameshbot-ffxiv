@@ -164,17 +164,12 @@ public sealed partial class MentionResolver
     /// with its first word, so one search per token covers every candidate length.
     /// </summary>
     private async Task<IReadOnlyCollection<RestGuildUser>> SearchMembersAsync(string firstWord, CancellationToken ct) =>
-        await guild.SearchUsersAsync(firstWord, limit: 50, options: new RequestOptions { CancelToken = ct });
+        await GuildMemberSearch.SearchAsync(guild, firstWord, ct);
 
     private static Mention? ResolveUser(IReadOnlyCollection<RestGuildUser> results, string name)
     {
-        // Exact match only, username first.
-        var user = results.FirstOrDefault(u => string.Equals(u.Username, name, StringComparison.OrdinalIgnoreCase))
-                   ?? results.FirstOrDefault(u =>
-                       string.Equals(u.Nickname, name, StringComparison.OrdinalIgnoreCase)
-                       || string.Equals(u.GlobalName, name, StringComparison.OrdinalIgnoreCase)
-                       || string.Equals(u.DisplayName, name, StringComparison.OrdinalIgnoreCase));
-
+        // Exact match only, username first — the same rule the setup-code DM uses.
+        var user = GuildMemberSearch.MatchExact(results, name);
         return user is null ? null : new Mention(user.Mention, user.Id, IsRole: false);
     }
 }

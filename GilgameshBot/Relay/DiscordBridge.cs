@@ -4,6 +4,7 @@ using Discord;
 using Discord.Net;
 using Discord.WebSocket;
 using GilgameshBot.Chat;
+using GilgameshBot.Setup;
 
 namespace GilgameshBot.Relay;
 
@@ -277,6 +278,7 @@ public sealed class DiscordBridge : IDisposable
         }
 
         s.TextChannel = textChannel;
+        s.Guild = guild;
         s.Mentions = new MentionResolver(guild, log);
         LastError = null;
 
@@ -294,6 +296,12 @@ public sealed class DiscordBridge : IDisposable
                 coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
+
+                // Ready means the token works, which is exactly what both of these wait for:
+                // scrub the DM this plugin's own setup code arrived in, and withdraw the codes
+                // this officer handed out that nobody imported. Neither may delay the connection.
+                s.Expiry = Task.Run(() => SetupCodeExpiryLoopAsync(s));
+                _ = Task.Run(() => ApplyPendingReceiptAsync(s));
             }
 
             State = BridgeState.Connected;
@@ -338,10 +346,7 @@ public sealed class DiscordBridge : IDisposable
         try
         {
             // The label is read on the game thread; don't wait forever if that thread is busy.
-            var labelTask = characterLabelProvider();
-            var who = await Task.WhenAny(labelTask, Task.Delay(TimeSpan.FromSeconds(2))) == labelTask
-                ? labelTask.Result
-                : "an officer";
+            var who = await CharacterLabelAsync();
             s.AnnouncedVia = who; // remembered for the Offline notice: the game state may be gone by then
 
             await textChannel.SendMessageAsync(
@@ -501,6 +506,124 @@ public sealed class DiscordBridge : IDisposable
             options: new RequestOptions { CancelToken = ct });
     }
 
+    // --- Setup code delivery --------------------------------------------------------------
+
+    /// <summary>
+    /// True when a setup code can be handed over by DM: the bot needs a live guild to look the
+    /// member up in.
+    /// </summary>
+    public bool CanSendSetupCode => State == BridgeState.Connected && session?.Guild is not null;
+
+    /// <summary>
+    /// DMs the setup code to <paramref name="discordName"/> in the active branch's server.
+    /// Returns the line to show the officer; it never contains the code.
+    /// </summary>
+    public async Task<SetupCodeOutcome> SendSetupCodeAsync(string discordName)
+    {
+        var s = session;
+        if (s?.Guild is not { } guild || State != BridgeState.Connected)
+            return new SetupCodeOutcome(false, "Connect first.");
+
+        var who = await CharacterLabelAsync();
+
+        try
+        {
+            return await SetupCodeDelivery.SendAsync(s.Client, guild, config, discordName, who, log, s.Cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return new SetupCodeOutcome(false, "Disconnected before the setup code could be sent.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning("Sending a setup code by DM failed ({Type}).", ex.GetType().Name);
+            return new SetupCodeOutcome(false, "Could not send the setup code. Share it by clipboard instead.");
+        }
+    }
+
+    /// <summary>Withdraws every setup code DM this officer sent, whatever its age.</summary>
+    public async Task<SetupCodeOutcome> RevokeSetupCodesAsync()
+    {
+        var s = session;
+        if (s is null || State != BridgeState.Connected)
+            return new SetupCodeOutcome(false, "Connect first.");
+
+        if (config.SentSetupCodes.Count == 0)
+            return new SetupCodeOutcome(true, "No setup codes were sent by DM.");
+
+        try
+        {
+            var revoked = await SetupCodeDelivery.SweepAsync(s.Client, config, all: true, log, s.Cts.Token);
+            return new SetupCodeOutcome(true, revoked == 1
+                ? "1 setup code revoked."
+                : $"{revoked} setup codes revoked.");
+        }
+        catch (OperationCanceledException)
+        {
+            return new SetupCodeOutcome(false, "Disconnected before the setup codes could be revoked.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning("Revoking setup code DMs failed ({Type}).", ex.GetType().Name);
+            return new SetupCodeOutcome(false, "Could not revoke the setup codes.");
+        }
+    }
+
+    /// <summary>Withdraws unimported setup code DMs on connect, then every ten minutes.</summary>
+    private async Task SetupCodeExpiryLoopAsync(Session s)
+    {
+        var ct = s.Cts.Token;
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (config.SentSetupCodes.Count > 0)
+                    await SetupCodeDelivery.SweepAsync(s.Client, config, all: false, log, ct);
+
+                await Task.Delay(SetupCodeDelivery.SweepInterval, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // normal shutdown
+        }
+        catch (Exception ex)
+        {
+            log.Warning("The setup code expiry sweep stopped ({Type}).", ex.GetType().Name);
+        }
+    }
+
+    /// <summary>Replaces the DM this plugin's setup code arrived in with a receipt.</summary>
+    private async Task ApplyPendingReceiptAsync(Session s)
+    {
+        if (config.PendingReceipt is null)
+            return;
+
+        var who = await CharacterLabelAsync();
+        await SetupCodeDelivery.ApplyPendingReceiptAsync(s.Client, config, who, log, s.Cts.Token);
+    }
+
+    /// <summary>
+    /// "Character Name @ World", or a neutral stand-in when the game thread is busy. Reused by
+    /// the setup code DM and its receipt, which both name the officer involved.
+    /// </summary>
+    private async Task<string> CharacterLabelAsync()
+    {
+        try
+        {
+            var labelTask = characterLabelProvider();
+            return await Task.WhenAny(labelTask, Task.Delay(TimeSpan.FromSeconds(2))) == labelTask
+                ? labelTask.Result
+                : "an officer";
+        }
+        catch (Exception ex)
+        {
+            log.Debug(ex, "Could not read the character label.");
+            return "an officer";
+        }
+    }
+
     // --- Teardown -----------------------------------------------------------------------
 
     private bool IsCurrent(Session s) => ReferenceEquals(session, s);
@@ -536,6 +659,11 @@ public sealed class DiscordBridge : IDisposable
         if (s.Presence is { } presence)
         {
             try { await presence; } catch { /* the coordinator logs its own errors */ }
+        }
+
+        if (s.Expiry is { } expiry)
+        {
+            try { await expiry; } catch { /* it logs its own errors */ }
         }
 
         // Hand off: drop our presence message so a peer can take the head of the queue, and find
@@ -610,10 +738,17 @@ public sealed class DiscordBridge : IDisposable
         public Task? ConnectTask { get; set; }
         public Task? Worker { get; set; }
         public SocketTextChannel? TextChannel { get; set; }
+
+        /// <summary>The branch's server, resolved on Ready. Needed to look up a DM recipient.</summary>
+        public SocketGuild? Guild { get; set; }
+
         public MentionResolver? Mentions { get; set; }
         public PresenceCoordinator? Coordinator { get; set; }
         public string? CoordinatorProblem { get; set; }
         public Task? Presence { get; set; }
+
+        /// <summary>The setup code expiry sweep; awaited on teardown like the presence loop.</summary>
+        public Task? Expiry { get; set; }
         public bool AnnouncedOnline { get; set; }
 
         /// <summary>Character label used in the Online notice, reused by the Offline one.</summary>

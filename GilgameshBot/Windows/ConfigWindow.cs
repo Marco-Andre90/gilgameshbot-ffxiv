@@ -49,6 +49,11 @@ public sealed class ConfigWindow : Window, IDisposable
     // Set for one frame to force the Status tab (which owns the setup code block) to the front.
     private bool selectStatusTab;
 
+    // "Send by DM" / "Revoke all". Both are Discord I/O, so the button starts a task and the
+    // result lands in setupMessage on a later frame; Draw itself never blocks.
+    private string dmTargetBuffer = string.Empty;
+    private Task<SetupCodeOutcome>? setupCodeAction;
+
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
         this.plugin = plugin;
@@ -101,6 +106,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ConsumeCharacterProbe();
+        ConsumeSetupCodeAction();
 
         // Consumed exactly once, whether or not the tab ends up being drawn this frame.
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
@@ -599,6 +605,8 @@ public sealed class ConfigWindow : Window, IDisposable
             + "Available once the Discord tab has a token and at least one complete branch.");
 
         ImGuiHelpers.ScaledDummy(4);
+        DrawSendByDm();
+        ImGuiHelpers.ScaledDummy(4);
 
         var importWidth = 90 * ImGuiHelpers.GlobalScale;
         ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - importWidth - ImGui.GetStyle().ItemSpacing.X);
@@ -610,8 +618,108 @@ public sealed class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Import", new Vector2(importWidth, 0)))
             TryImport(setupCodeBuffer);
 
+        DrawSentSetupCodes();
+
         if (setupMessage is { } setupMsg)
             TextWrappedColoured(setupMessageIsWarning ? Yellow : Green, setupMsg);
+    }
+
+    /// <summary>
+    /// Hands the setup code straight to another officer as a Discord DM, so it never passes
+    /// through a chat window. The code itself is built and sent on a background task; only the
+    /// outcome ever comes back here.
+    /// </summary>
+    private void DrawSendByDm()
+    {
+        var busy = setupCodeAction is not null;
+        var canSend = !busy && config.IsDiscordConfigured && plugin.Bridge.CanSendSetupCode;
+
+        var sendWidth = 130 * ImGuiHelpers.GlobalScale;
+        var helpWidth = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X;
+
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - sendWidth - helpWidth
+                               - ImGui.GetStyle().ItemSpacing.X);
+        ImGui.InputTextWithHint("##dmTarget", "Discord username", ref dmTargetBuffer, 64);
+
+        ImGui.SameLine();
+
+        using (ImRaii.Disabled(!canSend))
+        {
+            if (ImGui.Button("Send by DM", new Vector2(sendWidth, 0)))
+            {
+                setupCodeAction = plugin.Bridge.SendSetupCodeAsync(dmTargetBuffer);
+                setupMessage = null;
+            }
+        }
+
+        // Outside the disabled scope, so the explanation still works while the button is greyed out.
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Connect first: the bot needs the server to find the member.\n\n"
+            + "Sends the setup code as a Discord direct message. The DM is replaced with a receipt "
+            + "once they import it, and deleted after 24 hours if they never do.");
+    }
+
+    /// <summary>Setup codes handed out by DM that are still out there, newest last.</summary>
+    private void DrawSentSetupCodes()
+    {
+        // Snapshot: the expiry sweep replaces this list from a background task.
+        var sent = config.SentSetupCodes.ToArray();
+        if (sent.Length == 0)
+            return;
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        TextColoured(Grey, "Sent codes:");
+
+        var now = DateTime.UtcNow;
+        using (ImRaii.PushIndent(1))
+        {
+            foreach (var entry in sent)
+            {
+                var age = now - entry.SentAtUtc;
+                var state = age >= SetupCodeDelivery.Lifetime ? "expired" : "pending";
+                var to = entry.To.Length > 0 ? entry.To : "someone";
+                TextColoured(Grey, $"{to} · {DescribeAge(age)} · {state}");
+            }
+        }
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        using (ImRaii.Disabled(setupCodeAction is not null || plugin.Bridge.State != BridgeState.Connected))
+        {
+            if (ImGui.Button("Revoke all", ImGuiHelpers.ScaledVector2(140, 0)))
+            {
+                setupCodeAction = plugin.Bridge.RevokeSetupCodesAsync();
+                setupMessage = null;
+            }
+        }
+    }
+
+    private static string DescribeAge(TimeSpan age) => age switch
+    {
+        { TotalMinutes: < 1 } => "just now",
+        { TotalHours: < 1 } => $"{(int)age.TotalMinutes} min ago",
+        { TotalDays: < 1 } => $"{(int)age.TotalHours} h ago",
+        _ => $"{(int)age.TotalDays} d ago",
+    };
+
+    /// <summary>Picks up a finished Send by DM / Revoke all. Called once per frame.</summary>
+    private void ConsumeSetupCodeAction()
+    {
+        if (setupCodeAction is not { IsCompleted: true } action)
+            return;
+
+        setupCodeAction = null;
+
+        // The bridge catches its own failures and answers with a line meant for the officer; a
+        // task that faulted anyway must still not surface anything from the request.
+        var outcome = action.IsCompletedSuccessfully
+            ? action.Result
+            : new SetupCodeOutcome(false, "Could not reach Discord. Share the code by clipboard instead.");
+
+        setupMessage = outcome.Message;
+        setupMessageIsWarning = !outcome.Ok;
     }
 
     /// <summary>Imports the setup code in the clipboard. Draw thread only (touches ImGui).</summary>

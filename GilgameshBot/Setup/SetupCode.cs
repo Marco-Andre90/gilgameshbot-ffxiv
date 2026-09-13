@@ -22,6 +22,20 @@ public sealed class SetupBranch
 }
 
 /// <summary>
+/// Pointer to the Discord DM a setup code was delivered in, so the importing plugin can replace
+/// that message with a receipt. Optional: a code exported to the clipboard carries none.
+/// </summary>
+public sealed class SetupReceipt
+{
+    [JsonPropertyName("channel")] public string Channel { get; set; } = string.Empty;
+    [JsonPropertyName("message")] public string Message { get; set; } = string.Empty;
+
+    // Parsed IDs, filled in by TryDecode once validated.
+    [JsonIgnore] public ulong ChannelId { get; set; }
+    [JsonIgnore] public ulong MessageId { get; set; }
+}
+
+/// <summary>
 /// The shareable half of the configuration, carried between officers as one opaque string.
 /// </summary>
 /// <remarks>
@@ -35,6 +49,14 @@ public sealed class SetupPayload
     [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 10;
     [JsonPropertyName("stale")] public int Stale { get; set; } = 20;
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
+
+    /// <summary>
+    /// Set only on codes delivered by DM. Never required: an older plugin simply ignores it, and
+    /// a code without one behaves exactly as before.
+    /// </summary>
+    [JsonPropertyName("receipt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SetupReceipt? Receipt { get; set; }
 }
 
 /// <summary>
@@ -63,7 +85,12 @@ public static class SetupCode
     };
 
     /// <summary>Builds the setup code from the shareable settings. Never log the result.</summary>
-    public static string Encode(Configuration config)
+    /// <param name="config">The settings to share.</param>
+    /// <param name="receipt">
+    /// Where the code is about to be delivered, when it travels as a Discord DM. The importing
+    /// plugin uses it to replace that message with a receipt. Null for the clipboard export.
+    /// </param>
+    public static string Encode(Configuration config, SetupReceipt? receipt = null)
     {
         var heartbeat = Math.Clamp(config.HeartbeatSeconds, 10, 120);
 
@@ -86,6 +113,7 @@ public static class SetupCode
                     State = b.StateChannelId.ToString(),
                 })
                 .ToList(),
+            Receipt = receipt,
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -188,6 +216,22 @@ public static class SetupCode
             branch.StateChannelId = stateChannelId;
         }
 
+        // The receipt pointer is a convenience, never a requirement: a malformed one is dropped
+        // rather than failing the import, and an older code simply has none.
+        if (parsed.Receipt is { } receipt)
+        {
+            if (ulong.TryParse(receipt.Channel, out var receiptChannelId) && receiptChannelId != 0
+                && ulong.TryParse(receipt.Message, out var receiptMessageId) && receiptMessageId != 0)
+            {
+                receipt.ChannelId = receiptChannelId;
+                receipt.MessageId = receiptMessageId;
+            }
+            else
+            {
+                parsed.Receipt = null;
+            }
+        }
+
         parsed.Token = parsed.Token.Trim();
 
         // Same clamps as the settings window, applied in the same order: the heartbeat first,
@@ -220,6 +264,19 @@ public static class SetupCode
             .ToList();
         config.HeartbeatSeconds = payload.Heartbeat;
         config.StaleSeconds = payload.Stale;
+
+        // Only a code that came with a pointer sets one. A clipboard import leaves an earlier
+        // pending receipt alone, so a DM still gets scrubbed even if the officer pasted the code
+        // by hand in between.
+        if (payload.Receipt is { } receipt)
+        {
+            config.PendingReceipt = new ReceiptPointer
+            {
+                ChannelId = receipt.ChannelId,
+                MessageId = receipt.MessageId,
+            };
+        }
+
         config.Save();
     }
 
