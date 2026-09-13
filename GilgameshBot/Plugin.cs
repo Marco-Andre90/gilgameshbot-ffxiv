@@ -165,11 +165,29 @@ public sealed class Plugin : IDalamudPlugin
         string? lastName = null;
         var branchFound = false;
 
+        // What the game gave us at any point during the window, for the diagnostic at the end.
+        var sawWorld = false;
+        var sawTag = false;
+        var sawName = false;
+        var requestedFcData = false;
+
         try
         {
             while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
             {
                 var (world, tag, name, fcId) = await Framework.RunOnFrameworkThread(ReadCharacterBranchKey);
+                sawWorld |= world.Length > 0;
+                sawTag |= tag.Length > 0;
+                sawName |= name.Length > 0;
+
+                // The tag is on the player object, the name comes from the Free Company info
+                // proxy, which the game fills on login. A plugin loaded mid-session can find that
+                // proxy empty: ask the game to fill it, once.
+                if (tag.Length > 0 && name.Length == 0 && !requestedFcData)
+                {
+                    requestedFcData = true;
+                    await Framework.RunOnFrameworkThread(RequestFreeCompanyData);
+                }
 
                 // The name is the key, but the tag is what proves the read is fresh: it hangs
                 // off LocalPlayer, which does not exist until the new character has loaded, while
@@ -258,10 +276,22 @@ public sealed class Plugin : IDalamudPlugin
             reason = $"No branch configured for {fc} @ {lastWorld}. "
                      + "Ask the officer who set the bot up to add it.";
         }
+        else if (sawTag && !sawName)
+        {
+            reason = "The game has not loaded this character's Free Company details yet. "
+                     + "Open the Free Company window once, or log out and back in, then /gilga connect.";
+        }
+        else if (!sawWorld)
+        {
+            reason = "No character is loaded, so there is nothing to relay.";
+        }
         else
         {
             reason = "This character is not in a Free Company, so there is nothing to relay.";
         }
+
+        Log.Debug("Branch resolution saw world={World} tag={Tag} name={Name} within {Seconds}s.",
+            sawWorld, sawTag, sawName, BranchResolveWindow.TotalSeconds);
 
         Bridge.SetUnavailable(reason);
         Log.Warning("{Reason}", reason);
@@ -303,6 +333,24 @@ public sealed class Plugin : IDalamudPlugin
     /// must feed the retry loop, not end branch resolution for this login.
     /// </para>
     /// </remarks>
+    /// <summary>Asks the game to (re)load the Free Company info proxy. Framework thread only.</summary>
+    private static unsafe void RequestFreeCompanyData()
+    {
+        try
+        {
+            var proxy = InfoProxyFreeCompany.Instance();
+            if (proxy != null)
+            {
+                proxy->RequestData();
+                Log.Debug("Requested Free Company data from the game.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not request Free Company data.");
+        }
+    }
+
     private static unsafe (string Name, ulong Id) ReadFreeCompany()
     {
         try
