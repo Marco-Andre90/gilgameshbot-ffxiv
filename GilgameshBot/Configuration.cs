@@ -10,9 +10,9 @@ namespace GilgameshBot;
 /// <remarks>
 /// The matching key is <see cref="World"/> + <see cref="FcName"/>, compared trimmed and
 /// case-insensitively. Free Company <em>names</em> are unique on a world; tags are not, so
-/// <see cref="FcTag"/> is only a human label and a secondary check. Each branch must have its
-/// <em>own</em> state channel: two branches sharing one would make their leaders contend and
-/// silence one of the two Free Companies.
+/// <see cref="FcTag"/> is only a human label and a secondary check. Branches on the same Discord
+/// server may share one state channel (presence messages are tagged with the relay channel id);
+/// the state channel must never be the relay channel itself.
 /// </remarks>
 [Serializable]
 public sealed class FcBranch
@@ -43,7 +43,8 @@ public sealed class FcBranch
 
     /// <summary>
     /// Hidden/admin channel where every instance relaying this branch keeps a presence message,
-    /// so that exactly one of them relays and the others queue up. One per branch.
+    /// so that exactly one of them relays and the others queue up. May be shared by every
+    /// branch on the server; must differ from <see cref="ChannelId"/>.
     /// </summary>
     public ulong StateChannelId { get; set; }
 
@@ -86,6 +87,40 @@ public sealed class FcBranch
 }
 
 /// <summary>
+/// A setup code this officer handed to somebody by Discord DM, remembered so the plugin can
+/// delete the message once it expires (or on <c>/gilga revoke</c>).
+/// </summary>
+/// <remarks>
+/// Only the pointer to the message is stored — never the code itself, which lives in the DM and
+/// in nothing else.
+/// </remarks>
+[Serializable]
+public sealed class SentSetupCode
+{
+    /// <summary>The DM channel the code was sent to.</summary>
+    public ulong ChannelId { get; set; }
+
+    /// <summary>The message carrying the code.</summary>
+    public ulong MessageId { get; set; }
+
+    /// <summary>Display name of the member it was sent to, for the settings list.</summary>
+    public string To { get; set; } = string.Empty;
+
+    public DateTime SentAtUtc { get; set; }
+}
+
+/// <summary>
+/// Where the DM that carried the setup code this plugin imported lives, so it can be replaced
+/// with a receipt once the token is proven to work. Set by an imported code, cleared afterwards.
+/// </summary>
+[Serializable]
+public sealed class ReceiptPointer
+{
+    public ulong ChannelId { get; set; }
+    public ulong MessageId { get; set; }
+}
+
+/// <summary>
 /// Plugin settings. Persisted by Dalamud as JSON in
 /// %AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json.
 /// </summary>
@@ -109,6 +144,22 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>The Free Company branches this bot serves, one per (home world, FC name).</summary>
     public List<FcBranch> Branches { get; set; } = [];
+
+    /// <summary>
+    /// Setup codes handed out by DM that have not been imported yet. The plugin deletes each of
+    /// them 24 hours after it was sent, and on <c>/gilga revoke</c>.
+    /// </summary>
+    /// <remarks>
+    /// Replaced wholesale rather than mutated in place: the settings window enumerates it on the
+    /// draw thread while the expiry sweep runs on a background task.
+    /// </remarks>
+    public List<SentSetupCode> SentSetupCodes { get; set; } = [];
+
+    /// <summary>
+    /// The DM this plugin's settings were imported from, waiting to be replaced with a receipt
+    /// on the first connect that proves the token works. Null when there is nothing to scrub.
+    /// </summary>
+    public ReceiptPointer? PendingReceipt { get; set; }
 
     // --- Behaviour ---
 

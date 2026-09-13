@@ -35,10 +35,12 @@ Updates arrive through the plugin installer like any other plugin — nothing to
 
 ### Got a setup code?
 
-An officer in your FC has already set the bot up and sent you one long line of text (by private message). That is all you need:
+An officer in your FC has already set the bot up and sent you one long line of text — as a Discord DM from **GilgameshBot**, or by private message. That is all you need:
 
 1. Copy the code.
 2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`, or the short form `/gilga import`).
+
+If it arrived as a DM from the bot, that message is replaced with a receipt the first time the plugin connects, and the code is gone from your inbox. A DM you never import is deleted after 24 hours, so ask for a new one if you left it too long.
 
 That's it — the plugin looks up your character's branch and connects right away. The token and every branch (server, relay channel, state channel) are filled in for you. The other options (auto-connect, whether your own lines are relayed, …) stay personal to you.
 
@@ -54,7 +56,16 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
    - **Server ID**, **Channel ID**, **State channel ID** — from the Discord setup below.
 4. Repeat step 3 for every other branch. All branches on the same Discord server can share one state channel.
 5. Click **Connect** (or log out and back in with *Connect automatically* enabled).
-6. On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow officers **by private message**. They import it and are done, on every one of their characters.
+6. Hand the setup code to your fellow officers. They import it and are done, on every one of their characters.
+
+   **Recommended — send it by Discord DM.** While connected, type `/gilga send <discord username>` in game (or use **Send by DM** on the Status tab). The bot sends that member a direct message containing the code; they copy the line and type `/gilga import`. Nothing ever passes through your own chat window or clipboard.
+
+   The DM looks after itself:
+   - **On import**, their plugin replaces the message with a receipt — `✅ Setup code imported by …` — so the code stops sitting in their inbox as soon as it has been used.
+   - **After 24 hours**, if they never imported it, your plugin deletes the message. `/gilga revoke` does the same immediately, for every code you sent.
+   - The Status tab lists the codes you sent that are still out there, with a **Revoke all** button.
+
+   **Alternative — the clipboard.** On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow officers **by private message**. This code carries no receipt: it neither expires nor can be revoked, so prefer the DM path when you can.
 
 The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`, and the Status tab shows `Branch: Kraken («KRKN» Kraken Company @ Behemoth)`.
 
@@ -82,6 +93,8 @@ The state channel fills up with one short message per running plugin (`🎮 [rel
 | `/gilgamesh disconnect` | Post the Offline notice and disconnect |
 | `/gilgamesh status` | Print connection state, the active branch (or why none matched), relayed-message count, and whether this instance is relaying or on standby |
 | `/gilgamesh import` | Import a setup code from the clipboard |
+| `/gilgamesh send <discord name>` | DM the setup code to that member of the branch's Discord server (username, display name or nickname, spaces allowed). Needs an active connection |
+| `/gilgamesh revoke` | Delete every setup code DM you sent that has not been imported |
 | `/gilga` | Short for `/gilgamesh` — works with every subcommand above (`/gilga import`, `/gilga status`, …) |
 
 ## Options
@@ -104,7 +117,8 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 
 ## Security notes
 
-- **The setup code contains the bot token.** Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard.
+- **The setup code contains the bot token**, whether it travels by clipboard or by DM. Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard or through the DM it was sent in.
+- **A code sent with `/gilga send` is short-lived by design.** The DM is replaced with a receipt the moment the recipient's plugin connects successfully, and deleted 24 hours after it was sent if they never import it. `/gilga revoke` deletes every outstanding one at once. A code exported to the clipboard has none of that: it lives wherever you pasted it until you reset the token.
 - If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every officer. The old code stops working the moment the token is reset.
 - The token is also stored in the plugin's config file (`%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json`). Do not share that file; if it leaks, reset the token as above.
 - Invite the bot with **View Channels** and **Send Messages** only, and do not grant it more later.
@@ -118,6 +132,9 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **"This character is not in a Free Company, so there is nothing to relay."** — the plugin waited 30 seconds after login and never saw a Free Company name. Expected on a character with no FC; otherwise `/gilgamesh connect` tries again.
 - **"This is not a GilgameshBot setup code."** — what was copied is not a setup code (it must start with `GB2:`). Copy the whole line your officer sent, nothing else.
 - **"The setup code is damaged or incomplete."** — the code was cut short, wrapped or auto-corrected on the way. Ask for it again in a private message and copy it in one go.
+- **"… does not accept DMs from members of this server."** — that member has direct messages from server members turned off (Discord → Privacy Settings, per server). Ask them to allow it, or hand the code over with **Export setup code** instead.
+- **"No member named X in …"** — the name must match a username, display name or nickname in *that branch's* Discord server exactly (case does not matter). Check the exact handle in the member list.
+- **"Connect first."** — `/gilga send` and `/gilga revoke` need a live connection: the bot has to ask the server who that member is, and needs to reach the DM to delete it.
 - **"Bot is not a member of server …"** — the invite step was skipped, or the server ID is wrong.
 - **"Channel … not found"** — wrong channel ID, or the bot lacks *View Channel* on it.
 - **"State channel … not found"** — wrong state channel ID, or the bot lacks *View Channel* / *Read Message History* on it. The plugin does not connect until it can see that channel.

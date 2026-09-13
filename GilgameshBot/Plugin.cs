@@ -5,6 +5,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using GilgameshBot.Chat;
 using GilgameshBot.Relay;
+using GilgameshBot.Setup;
 using GilgameshBot.Windows;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
@@ -57,7 +58,8 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status | import. Short form: /gilga",
+            HelpMessage = "Open GilgameshBot settings. Also: /gilgamesh connect | disconnect | status | import "
+                          + "| send <discord name> | revoke. Short form: /gilga",
         });
 
         CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
@@ -344,7 +346,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
-        switch (args.Trim().ToLowerInvariant())
+        // The verb is the first word; whatever follows is kept verbatim, because a Discord
+        // display name may well contain spaces ("/gilga send Justice Archon").
+        var trimmed = args.Trim();
+        var split = trimmed.IndexOf(' ');
+        var verb = (split < 0 ? trimmed : trimmed[..split]).ToLowerInvariant();
+        var rest = split < 0 ? string.Empty : trimmed[(split + 1)..].Trim();
+
+        switch (verb)
         {
             case "connect":
                 BeginBranchResolution();
@@ -378,11 +387,53 @@ public sealed class Plugin : IDalamudPlugin
                 configWindow.RequestClipboardImport();
                 break;
 
+            case "send":
+                // All Discord I/O: hand it to a background task and return to the game at once.
+                // The reply never contains the code, only whether it went out.
+                if (rest.Length == 0)
+                {
+                    ChatGui.PrintError("GilgameshBot: say who to send it to — /gilga send <discord username>.",
+                        "GilgameshBot");
+                    break;
+                }
+
+                if (!Bridge.CanSendSetupCode)
+                {
+                    ChatGui.PrintError("GilgameshBot: Connect first.", "GilgameshBot");
+                    break;
+                }
+
+                _ = Task.Run(async () => PrintFromBackground(await Bridge.SendSetupCodeAsync(rest)));
+                break;
+
+            case "revoke":
+                if (!Bridge.CanSendSetupCode)
+                {
+                    ChatGui.PrintError("GilgameshBot: Connect first.", "GilgameshBot");
+                    break;
+                }
+
+                _ = Task.Run(async () => PrintFromBackground(await Bridge.RevokeSetupCodesAsync()));
+                break;
+
             default:
                 configWindow.Toggle();
                 break;
         }
     }
+
+    /// <summary>
+    /// Prints the outcome of a background Discord operation to game chat, on the framework thread.
+    /// Callers pass only their own fixed text — never a setup code or anything decoded from one.
+    /// </summary>
+    private static void PrintFromBackground(SetupCodeOutcome outcome) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            if (outcome.Ok)
+                ChatGui.Print($"GilgameshBot: {outcome.Message}", "GilgameshBot");
+            else
+                ChatGui.PrintError($"GilgameshBot: {outcome.Message}", "GilgameshBot");
+        });
 
 
     /// <summary>

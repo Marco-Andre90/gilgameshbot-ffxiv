@@ -31,6 +31,7 @@ GilgameshBot/
   Relay/MessageFormatter        markdown escaping, mass-mention neutralising, 2000-char cap
   Relay/PresenceCoordinator     standby queue: own presence message + heartbeat, leader = oldest alive
   Setup/SetupCode.cs            "GB2:" setup code — encode / decode / apply token + every branch
+  Setup/SetupCodeDelivery.cs    sends a setup code by DM, the 24 h expiry sweep, the import receipt
   GilgameshBot.json             plugin manifest (mirrors the csproj properties)
   Windows/ConfigWindow          ImGui settings + status
 ```
@@ -48,7 +49,8 @@ GilgameshBot/
 - **Branch is chosen from the logged-in character** (home world + FC name), never from a manual selection. `IPlayerState.HomeWorld` + `InfoProxyFreeCompany.Instance()->NameString`, read on the framework thread; `IObjectTable.LocalPlayer.CompanyTag` is read too but the tag is only a label and a secondary check — FC tags are not unique within a world, FC names are. Both are empty for the first frames after login, so resolution retries for ~30 s and is cancelled on logout; a throwing native read must feed that retry loop, never end it. No matching branch ⇒ do not connect, and say why through `DiscordBridge.SetUnavailable`.
 - **Game thread never blocks.** `IChatGui.ChatMessage` runs on the game's main thread: extract + enqueue only. All Discord I/O lives on background tasks in `DiscordBridge`.
 - **Never log or print the bot token.**
-- **Setup code contains the token.** Only ever moves through the clipboard; never log, print or render it. Decode failures produce a fixed human message and never echo any part of the input.
+- **Setup code contains the token.** Only ever moves through the clipboard or the Discord DM it is sent in; never log, print or render it. Decode failures produce a fixed human message and never echo any part of the input.
+- **Setup codes sent by DM carry a receipt pointer; the importer scrubs the DM after its first successful connect; the sender deletes unimported DMs after 24 hours.** The pointer is optional in the payload — a clipboard code has none and the format version does not move.
 - **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.
 - **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them. Leader election is scoped per branch by the `[relayChannelId]` tag in the presence message, so any number of branches may share one state channel; the state channel must never be the relay channel (the queue is read from the newest 100 messages).
 - **`Disconnect()` is fire-and-forget.** Only `Dispose()` waits (bounded) so the Offline notice gets out during unload.
