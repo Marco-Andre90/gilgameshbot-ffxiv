@@ -342,6 +342,7 @@ public sealed class DiscordBridge : IDisposable
             var who = await Task.WhenAny(labelTask, Task.Delay(TimeSpan.FromSeconds(2))) == labelTask
                 ? labelTask.Result
                 : "an officer";
+            s.AnnouncedVia = who; // remembered for the Offline notice: the game state may be gone by then
 
             await textChannel.SendMessageAsync(
                 $"🟢 **GilgameshBot Online!** Relaying Free Company chat via {MessageFormatter.EscapeMarkdown(who)}.",
@@ -561,7 +562,8 @@ public sealed class DiscordBridge : IDisposable
             try
             {
                 await ch.SendMessageAsync(
-                    "🔴 **GilgameshBot Offline.** Free Company chat is not being relayed.",
+                    $"🔴 **GilgameshBot Offline.** {MessageFormatter.EscapeMarkdown(s.AnnouncedVia ?? "An officer")} "
+                    + "stopped relaying Free Company chat.",
                     allowedMentions: AllowedMentions.None);
             }
             catch (Exception ex)
@@ -613,5 +615,8 @@ public sealed class DiscordBridge : IDisposable
         public string? CoordinatorProblem { get; set; }
         public Task? Presence { get; set; }
         public bool AnnouncedOnline { get; set; }
+
+        /// <summary>Character label used in the Online notice, reused by the Offline one.</summary>
+        public string? AnnouncedVia { get; set; }
     }
 }
