@@ -42,6 +42,12 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("GilgameshBot");
     private readonly ConfigWindow configWindow;
 
+    /// <summary>
+    /// Last complete world + FC read of the logged-in character, keyed by content id and cleared
+    /// on logout. Framework thread only.
+    /// </summary>
+    private static (ulong ContentId, string World, string Tag, string Name, ulong FcId)? lastGoodKey;
+
     private readonly object resolveGate = new();
     private CancellationTokenSource? resolveCts;
 
@@ -315,7 +321,28 @@ public sealed class Plugin : IDalamudPlugin
 
         var (name, fcId) = ReadFreeCompany();
 
-        return (world.Trim(), tag.Trim(), name.Trim(), fcId);
+        var key = (World: world.Trim(), Tag: tag.Trim(), Name: name.Trim(), FcId: fcId);
+        var contentId = PlayerState.ContentId;
+
+        if (key.World.Length > 0 && key.Tag.Length > 0 && key.Name.Length > 0)
+        {
+            if (contentId != 0)
+                lastGoodKey = (contentId, key.World, key.Tag, key.Name, key.FcId);
+
+            return key;
+        }
+
+        // The game can drop the Free Company proxy (or the tag) mid-session, long after login.
+        // Membership does not change under a logged-in character without the game logging it
+        // out, so the last complete read for this very character is still the answer.
+        if (contentId != 0 && lastGoodKey is { } cached && cached.ContentId == contentId)
+        {
+            Log.Debug("Free Company read incomplete (world={World} tag={Tag} name={Name}); using this login's last read.",
+                key.World.Length > 0, key.Tag.Length > 0, key.Name.Length > 0);
+            return (cached.World, cached.Tag, cached.Name, cached.FcId);
+        }
+
+        return key;
     }
 
     /// <summary>
@@ -388,6 +415,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnLogout(int type, int code)
     {
+        lastGoodKey = null;
         CancelBranchResolution();
         Bridge.Disconnect();
     }
