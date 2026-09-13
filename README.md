@@ -1,22 +1,22 @@
 # GilgameshBot
 
-A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free Company chat to a Discord channel**. Named after the dimension-hopping Gilgamesh: while an officer running the plugin is in the game, the FC's conversation jumps over to Discord.
+A [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV that relays **Free Company chat to a Discord channel**. Named after the dimension-hopping Gilgamesh: while a member running the plugin is in the game, the FC's conversation jumps over to Discord.
 
-One bot serves any number of Free Company branches (one per home world + Free Company name), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of officers can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code.
+One bot serves any number of Free Company branches (one per home world + Free Company name), each with its own Discord server and channels. The plugin picks the branch from the character you log in as. Any number of members can run it: exactly one of them relays and the rest wait in a standby queue. Install it from the plugin installer and configure it by pasting one setup code.
 
 ## What it does
 
 - While your character is logged in, the plugin connects to Discord as **GilgameshBot** and posts every Free Company chat line to the configured channel as `**Character Name**: message`.
-- **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and Free Company name and looks them up in a branch table; each branch has its own Discord server, relay channel and state channel. An officer with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
+- **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and Free Company name and looks them up in a branch table; each branch has its own Discord server and relay channel, and the branches on a server share one hidden state channel. A member with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
-- The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** when the last officer stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
-- **One setup code configures everybody else.** The officer who created the bot exports a single string carrying the token and *every* branch; every other officer imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
-- **Several officers can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying officer logs out, the next in line takes over — cleanly and immediately, or within about 20 seconds if the relaying officer's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
+- The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** (naming who stopped) when the last member stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
+- **One setup code configures everybody else.** The member who created the bot exports a single string carrying the token and *every* branch; every other member imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
+- **Several members can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying member logs out, the next in line takes over — cleanly and immediately, or within about 20 seconds if the relaying member's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
 
 ## Requirements
 
 - Final Fantasy XIV launched through [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled.
-- For the officer who sets the bot up: a Discord server where you can create channels and invite bots.
+- For the member who sets the bot up: a Discord server where you can create channels and invite bots.
 
 ## Install
 
@@ -35,7 +35,7 @@ Updates arrive through the plugin installer like any other plugin — nothing to
 
 ### Got a setup code?
 
-An officer in your FC has already set the bot up and sent you one long line of text — as a Discord DM from **GilgameshBot**, or by private message. That is all you need:
+A member in your FC has already set the bot up and sent you one long line of text — as a Discord DM from **GilgameshBot**, or by private message. That is all you need:
 
 1. Copy the code.
 2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`, or the short form `/gilga import`).
@@ -56,7 +56,7 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
    - **Server ID**, **Channel ID**, **State channel ID** — from the Discord setup below.
 4. Repeat step 3 for every other branch. All branches on the same Discord server can share one state channel.
 5. Click **Connect** (or log out and back in with *Connect automatically* enabled).
-6. Hand the setup code to your fellow officers. They import it and are done, on every one of their characters.
+6. Hand the setup code to your fellow members. They import it and are done, on every one of their characters.
 
    **Recommended — send it by Discord DM.** While connected, type `/gilga send <discord username>` in game (or use **Send by DM** on the Status tab). The bot sends that member a direct message containing the code; they copy the line and type `/gilga import`. Nothing ever passes through your own chat window or clipboard.
 
@@ -65,11 +65,11 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
    - **After 24 hours**, if they never imported it, your plugin deletes the message. `/gilga revoke` does the same immediately, for every code you sent.
    - The Status tab lists the codes you sent that are still out there, with a **Revoke all** button.
 
-   **Alternative — the clipboard.** On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow officers **by private message**. This code carries no receipt: it neither expires nor can be revoked, so prefer the DM path when you can.
+   **Alternative — the clipboard.** On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow members **by private message**. This code carries no receipt: it neither expires nor can be revoked, so prefer the DM path when you can.
 
 The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`, and the Status tab shows `Branch: Kraken («KRKN» Kraken Company @ Behemoth)`.
 
-Officers with characters in more than one branch need nothing extra: one setup code covers all of them, and the plugin switches branch when they switch character.
+Members with characters in more than one branch need nothing extra: one setup code covers all of them, and the plugin switches branch when they switch character.
 
 ## Discord setup (once per branch)
 
@@ -78,7 +78,7 @@ Officers with characters in more than one branch need nothing extra: one setup c
 3. **OAuth2 → URL Generator**: scope `bot`; permissions **View Channels** and **Send Messages** only. Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
 4. In Discord, enable **Settings → Advanced → Developer Mode**, then right-click the server → **Copy Server ID**, and right-click the target channel → **Copy Channel ID**.
 5. Make sure the bot can see and post in that channel (check the channel's permission overrides).
-6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. It must be a **separate channel from the relay channel**, and nobody should post in it; one such channel is enough for every branch on that server: the plugin decides who relays from the messages it keeps there, and any other traffic breaks that. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the branch editor. Every officer relaying a given branch must point at the **same** state channel — and every branch needs its **own**.
+6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible only to the people who run the plugin. It must be a **separate channel from the relay channel**, and nobody should post in it; one such channel is enough for every branch on that server: the plugin decides who relays from the messages it keeps there, and any other traffic breaks that. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the branch editor. Every member relaying a given branch must point at the **same** state channel — and every branch needs its **own**.
 
 Repeat steps 3–6 for each branch: invite the same bot to that branch's Discord server, then copy its server, channel and state channel IDs (branches on the same server reuse the same state channel). Creating the application and its token (steps 1–2) happens only once.
 
@@ -119,7 +119,7 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 
 - **The setup code contains the bot token**, whether it travels by clipboard or by DM. Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard or through the DM it was sent in.
 - **A code sent with `/gilga send` is short-lived by design.** The DM is replaced with a receipt the moment the recipient's plugin connects successfully, and deleted 24 hours after it was sent if they never import it. `/gilga revoke` deletes every outstanding one at once. A code exported to the clipboard has none of that: it lives wherever you pasted it until you reset the token.
-- If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every officer. The old code stops working the moment the token is reset.
+- If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every member. The old code stops working the moment the token is reset.
 - The token is also stored in the plugin's config file (`%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json`). Do not share that file; if it leaks, reset the token as above.
 - Invite the bot with **View Channels** and **Send Messages** only, and do not grant it more later.
 - The plugin never logs the token. Discord.Net's own log lines are forwarded to Dalamud's log (warnings and errors at their level, the rest at debug).
@@ -128,9 +128,9 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 ## Troubleshooting
 
 - **"Discord is not configured: the bot token is missing."** — save a token on the Discord tab, or import a setup code.
-- **"No branch configured for Kraken Company «KRKN» @ Behemoth."** — this character's Free Company has no row in the branch table. Add one on the Discord tab (**Use my character** fills in the home world, FC name and FC tag), or ask the officer who set the bot up for an updated setup code. If a row *looks* right, check its **FC name** matches the FC exactly — the name, not the tag, is what is matched.
+- **"No branch configured for Kraken Company «KRKN» @ Behemoth."** — this character's Free Company has no row in the branch table. Add one on the Discord tab (**Use my character** fills in the home world, FC name and FC tag), or ask the member who set the bot up for an updated setup code. If a row *looks* right, check its **FC name** matches the FC exactly — the name, not the tag, is what is matched.
 - **"This character is not in a Free Company, so there is nothing to relay."** — the plugin waited 30 seconds after login and never saw a Free Company name. Expected on a character with no FC; otherwise `/gilgamesh connect` tries again.
-- **"This is not a GilgameshBot setup code."** — what was copied is not a setup code (it must start with `GB2:`). Copy the whole line your officer sent, nothing else.
+- **"This is not a GilgameshBot setup code."** — what was copied is not a setup code (it must start with `GB2:`). Copy the whole line your member sent, nothing else.
 - **"The setup code is damaged or incomplete."** — the code was cut short, wrapped or auto-corrected on the way. Ask for it again in a private message and copy it in one go.
 - **"… does not accept DMs from members of this server."** — that member has direct messages from server members turned off (Discord → Privacy Settings, per server). Ask them to allow it, or hand the code over with **Export setup code** instead.
 - **"No member named X in …"** — the name must match a username, display name or nickname in *that branch's* Discord server exactly (case does not matter). Check the exact handle in the member list.
@@ -138,15 +138,15 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **"Bot is not a member of server …"** — the invite step was skipped, or the server ID is wrong.
 - **"Channel … not found"** — wrong channel ID, or the bot lacks *View Channel* on it.
 - **"State channel … not found"** — wrong state channel ID, or the bot lacks *View Channel* / *Read Message History* on it. The plugin does not connect until it can see that channel.
-- **"Branch ... uses its relay channel as the state channel"** - the branch was saved with the same channel ID in both fields. The state channel must be its own hidden channel: the plugin builds the standby queue from the newest 100 messages there, and chat traffic pushes the presence messages out of that window, which makes officers disagree about who is relaying (duplicated lines, or nobody relaying). Create a separate channel, fix the branch, export a new setup code and send it to every officer.
+- **"Branch ... uses its relay channel as the state channel"** - the branch was saved with the same channel ID in both fields. The state channel must be its own hidden channel: the plugin builds the standby queue from the newest 100 messages there, and chat traffic pushes the presence messages out of that window, which makes members disagree about who is relaying (duplicated lines, or nobody relaying). Create a separate channel, fix the branch, export a new setup code and send it to every member.
 - **"The bot cannot read #state-channel"** / connected but on standby with no leader — the bot is missing **Read Message History** on the state channel. Discord answers an empty list instead of an error in that case, so the plugin cannot see its own presence message. Grant the permission (channel → Edit → Permissions → the bot's role), then delete any leftover presence messages in that channel.
-- **Two officers, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
+- **Two members, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.
 
 ## For contributors
 
-Only needed if you want to build the plugin yourself; officers install it from the custom repository above.
+Only needed if you want to build the plugin yourself; members install it from the custom repository above.
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
