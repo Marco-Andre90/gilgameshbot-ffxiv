@@ -507,6 +507,14 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
+        if (stateChannelId == channelId)
+        {
+            // The presence list is read from the newest messages of the state channel; chat
+            // traffic in the same channel pushes presence messages out of that window.
+            validationMessage = "The state channel must be a different channel from the relay channel.";
+            return;
+        }
+
         var branch = isNew ? new FcBranch() : config.Branches[selectedBranch];
 
         branch.Name = branchNameBuffer.Trim();
