@@ -50,7 +50,7 @@ GilgameshBot/
 - **Never log or print the bot token.**
 - **Setup code contains the token.** Only ever moves through the clipboard; never log, print or render it. Decode failures produce a fixed human message and never echo any part of the input.
 - **Mentions are an allow-list.** Every send passes `AllowedMentions` with exactly the user/role IDs the resolver produced; never widen it to `AllowedMentionTypes.Users/Roles/Everyone`. `@everyone`/`@here` are also neutralised in the text — keep both layers.
-- **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them. Leader election is scoped per branch because each branch has its own state channel — `PresenceCoordinator` just uses the channel the session hands it.
+- **Presence:** an instance only ever edits/deletes its own presence message; the only exception is deleting stale (>10 min) messages. Followers drop messages, never buffer them. Leader election is scoped per branch by the `[relayChannelId]` tag in the presence message, so any number of branches may share one state channel; the state channel must never be the relay channel (the queue is read from the newest 100 messages).
 - **`Disconnect()` is fire-and-forget.** Only `Dispose()` waits (bounded) so the Offline notice gets out during unload.
 - Namespace is `GilgameshBot.Relay`, not `GilgameshBot.Discord`, to avoid clashing with the `Discord` root namespace of Discord.Net.
 

@@ -52,7 +52,7 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
    - **Name** — a label for you, e.g. `Kraken`.
    - **Home world**, **FC name** and **FC tag** — click **Use my character** while logged in on a character in that FC and all three are filled in for you. The **home world + FC name** pair is what a character is matched on: FC names are unique on a world, FC tags are not (two Free Companies on one world may share a tag), so the tag is only a label and an extra check. The FC name is the full name spelled out on your Free Company profile; the tag is what appears in « » next to your name, typed without the brackets.
    - **Server ID**, **Channel ID**, **State channel ID** — from the Discord setup below.
-4. Repeat step 3 for every other branch. Each branch needs its **own** state channel; two branches sharing one would fight over who relays.
+4. Repeat step 3 for every other branch. All branches on the same Discord server can share one state channel.
 5. Click **Connect** (or log out and back in with *Connect automatically* enabled).
 6. On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow officers **by private message**. They import it and are done, on every one of their characters.
 
@@ -67,11 +67,11 @@ Officers with characters in more than one branch need nothing extra: one setup c
 3. **OAuth2 → URL Generator**: scope `bot`; permissions **View Channels** and **Send Messages** only. Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
 4. In Discord, enable **Settings → Advanced → Developer Mode**, then right-click the server → **Copy Server ID**, and right-click the target channel → **Copy Channel ID**.
 5. Make sure the bot can see and post in that channel (check the channel's permission overrides).
-6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. It must be a **separate channel from the relay channel**, one per branch, and nobody should post in it: the plugin decides who relays from the messages it keeps there, and any other traffic breaks that. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the branch editor. Every officer relaying a given branch must point at the **same** state channel — and every branch needs its **own**.
+6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. It must be a **separate channel from the relay channel**, and nobody should post in it; one such channel is enough for every branch on that server: the plugin decides who relays from the messages it keeps there, and any other traffic breaks that. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the branch editor. Every officer relaying a given branch must point at the **same** state channel — and every branch needs its **own**.
 
-Repeat steps 3–6 for each branch: invite the same bot to that branch's Discord server, then copy its server, channel and state channel IDs. Creating the application and its token (steps 1–2) happens only once.
+Repeat steps 3–6 for each branch: invite the same bot to that branch's Discord server, then copy its server, channel and state channel IDs (branches on the same server reuse the same state channel). Creating the application and its token (steps 1–2) happens only once.
 
-The state channel fills up with one short message per running plugin (`🎮 Character @ World · beat 42`), which the plugins keep updating and clean up after themselves.
+The state channel fills up with one short message per running plugin (`🎮 [relay channel id] Character @ World · beat 42`), which the plugins keep updating and clean up after themselves. The id tells the branches apart when they share the channel.
 
 ## Commands
 
@@ -124,7 +124,6 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **"Branch ... uses its relay channel as the state channel"** - the branch was saved with the same channel ID in both fields. The state channel must be its own hidden channel: the plugin builds the standby queue from the newest 100 messages there, and chat traffic pushes the presence messages out of that window, which makes officers disagree about who is relaying (duplicated lines, or nobody relaying). Create a separate channel, fix the branch, export a new setup code and send it to every officer.
 - **"The bot cannot read #state-channel"** / connected but on standby with no leader — the bot is missing **Read Message History** on the state channel. Discord answers an empty list instead of an error in that case, so the plugin cannot see its own presence message. Grant the permission (channel → Edit → Permissions → the bot's role), then delete any leftover presence messages in that channel.
 - **Two officers, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
-- **One branch never relays while another does** — the two branches are sharing a state channel. Give each its own; otherwise their instances queue against each other and only one Free Company gets relayed.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.
 

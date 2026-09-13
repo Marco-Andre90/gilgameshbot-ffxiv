@@ -289,7 +289,7 @@ public sealed class DiscordBridge : IDisposable
             // session: two would mean two presence messages and two heartbeat loops.
             if (s.Coordinator is null)
             {
-                var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, characterLabelProvider,
+                var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, branch.ChannelId, characterLabelProvider,
                     problem => ReportCoordinatorProblem(s, problem));
                 coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
                 s.Coordinator = coordinator;
