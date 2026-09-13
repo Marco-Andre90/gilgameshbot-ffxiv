@@ -23,6 +23,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
     // ImGui needs mutable buffers; IDs are edited as text and parsed on save.
     private string tokenBuffer;
+    private string setupCodeRolesBuffer = string.Empty;
     private bool showToken;
     private string? validationMessage;
 
@@ -281,6 +282,8 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         SectionGap();
+        DrawSlashCommandSettings();
+        SectionGap();
         DrawBranchTable();
         SectionGap();
         DrawBranchEditor();
@@ -290,6 +293,40 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGuiHelpers.ScaledDummy(4);
             TextColoured(Yellow, msg);
         }
+    }
+
+    /// <summary>
+    /// Who may run the bot's <c>/setupcode</c> command in Discord. The allow-list travels in the
+    /// setup code, so every officer's plugin enforces the same one.
+    /// </summary>
+    private void DrawSlashCommandSettings()
+    {
+        SectionHeader("Discord commands");
+
+        TextWrappedColoured(Grey,
+            "Members can ask the bot for a setup code with /setupcode, and who is relaying with "
+            + "/relaystatus. Both only work while at least one officer's plugin is connected.");
+        ImGuiHelpers.ScaledDummy(4);
+
+        ImGui.InputText("Roles allowed to use /setupcode (comma-separated)", ref setupCodeRolesBuffer, 512);
+
+        ImGuiHelpers.ScaledDummy(2);
+        TextWrappedColoured(Grey,
+            "Also open the command to those roles in Server Settings → Integrations → GilgameshBot. "
+            + "Left empty, only members with Manage Server can fetch a code.");
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (!ImGui.Button("Save roles", ImGuiHelpers.ScaledVector2(180, 0)))
+            return;
+
+        config.SetupCodeRoleNames = setupCodeRolesBuffer
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        config.Save();
+
+        setupCodeRolesBuffer = string.Join(", ", config.SetupCodeRoleNames);
+        validationMessage = "Saved. Export a new setup code so the other officers get it too.";
     }
 
     private void DrawBranchTable()
@@ -774,6 +811,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private void RefreshBuffersFromConfig()
     {
         tokenBuffer = config.BotToken;
+        setupCodeRolesBuffer = string.Join(", ", config.SetupCodeRoleNames);
         ClearBranchEditor();
     }
 

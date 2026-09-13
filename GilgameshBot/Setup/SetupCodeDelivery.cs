@@ -80,6 +80,25 @@ public static class SetupCodeDelivery
         if (user is null)
             return new SetupCodeOutcome(false, $"No member named {name} in {guild.Name}.");
 
+        return await SendToUserAsync(user, config, characterLabel, log, ct);
+    }
+
+    /// <summary>
+    /// DMs a setup code to an already-resolved member. This is the whole delivery: placeholder,
+    /// edit with the code carrying its own receipt pointer, and the tracking entry the 24-hour
+    /// sweep works from. <see cref="SendAsync"/> reaches it after resolving a typed name; the
+    /// <c>/setupcode</c> slash command hands in the invoking member directly.
+    /// </summary>
+    public static async Task<SetupCodeOutcome> SendToUserAsync(
+        IUser user,
+        Configuration config,
+        string characterLabel,
+        IPluginLog log,
+        CancellationToken ct)
+    {
+        if (!config.IsDiscordConfigured)
+            return new SetupCodeOutcome(false, "There is nothing to send yet: save a bot token and at least one branch first.");
+
         var displayName = user.Username;
 
         IDMChannel dm;
@@ -97,9 +116,12 @@ public static class SetupCodeDelivery
         }
         catch (HttpException ex) when (ex.DiscordCode == DiscordErrorCode.CannotSendMessageToUser)
         {
+            // Worded so it reads the same to the officer who typed /gilga send and to the member
+            // who ran /setupcode and is reading it as an ephemeral reply.
             return new SetupCodeOutcome(false,
-                $"{displayName} does not accept DMs from members of this server. "
-                + "Ask them to allow it, or share the code by clipboard.");
+                $"GilgameshBot cannot DM {displayName}: they have direct messages from members of "
+                + "this server turned off. Turn that on (Privacy Settings for this server), "
+                + "or share the code by clipboard.");
         }
         catch (Exception ex)
         {

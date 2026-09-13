@@ -138,6 +138,7 @@ public sealed class DiscordBridge : IDisposable
         s.Client.Ready += () => OnReadyAsync(s);
         s.Client.Connected += () => OnConnectedAsync(s);
         s.Client.Disconnected += ex => OnDisconnectedAsync(s, ex);
+        s.Client.SlashCommandExecuted += command => OnSlashCommandAsync(s, command);
 
         s.Worker = Task.Run(() => WorkerLoopAsync(s));
         s.ConnectTask = Task.Run(async () =>
@@ -297,6 +298,11 @@ public sealed class DiscordBridge : IDisposable
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
+                // The bot's own /setupcode and /relaystatus. Registration is one REST round trip
+                // against this branch's server, so it goes on a background task like the rest.
+                s.Slash = new SlashCommands(config, log, guild, branch, coordinator, characterLabelProvider);
+                _ = Task.Run(() => s.Slash.RegisterAsync(s.Cts.Token));
+
                 // Ready means the token works, which is exactly what both of these wait for:
                 // scrub the DM this plugin's own setup code arrived in, and withdraw the codes
                 // this officer handed out that nobody imported. Neither may delay the connection.
@@ -412,6 +418,19 @@ public sealed class DiscordBridge : IDisposable
                     LastError = null;
             }
         }
+    }
+
+    /// <summary>
+    /// A Discord slash command arrived. Every connected instance sees every interaction; the
+    /// handler itself decides whether this one is the leader that should answer, acknowledges,
+    /// and then works on a background task — the gateway task is never held.
+    /// </summary>
+    private Task OnSlashCommandAsync(Session s, SocketSlashCommand command)
+    {
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
+            return Task.CompletedTask;
+
+        return slash.HandleAsync(command, s.Cts.Token);
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)
@@ -748,6 +767,10 @@ public sealed class DiscordBridge : IDisposable
 
         public MentionResolver? Mentions { get; set; }
         public PresenceCoordinator? Coordinator { get; set; }
+
+        /// <summary>Handler for the bot's own slash commands; built with the coordinator.</summary>
+        public SlashCommands? Slash { get; set; }
+
         public string? CoordinatorProblem { get; set; }
         public Task? Presence { get; set; }
 
