@@ -40,7 +40,7 @@ An officer in your FC has already set the bot up and sent you one long line of t
 1. Copy the code.
 2. In game: `/gilgamesh` → **Import from clipboard** (or just type `/gilgamesh import`, or the short form `/gilga import`).
 
-If it arrived as a DM from the bot, that message is replaced with a receipt the first time the plugin connects, and the code is gone from your inbox. A DM you never import is deleted after 24 hours, so ask for a new one if you left it too long.
+If it arrived as a DM from the bot, that message is replaced with a receipt the first time the plugin connects, and the code is gone from your inbox. A DM you never import is deleted automatically (24 hours after `/gilga send`, 5 minutes after `/setupcode`), so ask for a new one if you left it too long.
 
 That's it — the plugin looks up your character's branch and connects right away. The token and every branch (server, relay channel, state channel) are filled in for you. The other options (auto-connect, whether your own lines are relayed, …) stay personal to you.
 
@@ -82,7 +82,7 @@ Officers with characters in more than one branch need nothing extra: one setup c
 5. Make sure the bot can see and post in that channel (check the channel's permission overrides).
 6. Create a **state channel**: a private text channel that no one needs to read — for example `#gilgamesh-state`, visible to officers only. It must be a **separate channel from the relay channel**, and nobody should post in it; one such channel is enough for every branch on that server: the plugin decides who relays from the messages it keeps there, and any other traffic breaks that. Give the bot **View Channel**, **Send Messages** and **Read Message History** on it. *Manage Messages* is **not** required: the plugin only ever edits and deletes messages the bot itself posted. Copy its ID the same way and paste it into **State channel ID** in the branch editor. Every officer relaying a given branch must point at the **same** state channel — and every branch needs its **own**.
 
-7. Decide who may fetch a setup code with `/setupcode`. Out of the box the command is only visible to members with **Manage Server**. To open it to your officers: **Server Settings → Integrations → GilgameshBot → Command permissions**, add the roles that may run `/setupcode`; then type the **same role names** into *Roles allowed to use /setupcode* on the plugin's **Discord** tab, click **Save roles**, and export/send a new setup code so every officer's plugin enforces the same list. Both gates must allow you: Discord decides who sees the command, the plugin decides who it answers.
+7. Decide who may fetch a setup code with `/setupcode`. Out of the box the command is only visible to members with **Manage Server**. To open it to a role: **Server Settings → Integrations → GilgameshBot → Command permissions**, remove `@everyone` if present and add the roles that may run `/setupcode`. Discord alone decides who can use it; nothing needs to change in the plugin.
 
 Repeat steps 3–6 for each branch: invite the same bot to that branch's Discord server, then copy its server, channel and state channel IDs (branches on the same server reuse the same state channel). Creating the application and its token (steps 1–2) happens only once.
 
@@ -107,13 +107,13 @@ The bot answers two slash commands in each branch's Discord server.
 
 | Command | Effect |
 |---|---|
-| `/setupcode` | The bot DMs you your own setup code, exactly as `/gilga send` would. The reply in the channel is ephemeral (only you see it) and never contains the code. Same rules as any code sent by DM: it expires after 24 hours and is replaced with a receipt once you import it |
+| `/setupcode` | The bot DMs you your own setup code, exactly as `/gilga send` would. The reply in the channel is ephemeral (only you see it) and never contains the code. The DM is deleted after 5 minutes if you don't import it, and replaced with a receipt as soon as you do |
 | `/relaystatus` | Ephemeral reply: which character is relaying this branch right now, how many officers are on standby, and the branch name |
 
 Two things to know:
 
 - **They only work while at least one officer's plugin is connected.** The bot has no server of its own — it runs inside the plugin. With nobody in game, Discord shows *"The application did not respond"*.
-- **`/setupcode` is gated twice.** Discord's own command permissions decide who can see and run it (**Manage Server** until the server owner opens it to specific roles under *Server Settings → Integrations → GilgameshBot*), and the plugin additionally requires Manage Server or one of the roles listed in *Roles allowed to use /setupcode* on the Discord tab — which travels in the setup code, so every officer's plugin enforces the same list. Leave that field empty and only Manage Server members get a code.
+- **`/setupcode` is gated by Discord.** Its command permissions decide who can see and run it: **Manage Server** until the server owner opens it to specific roles under *Server Settings → Integrations → GilgameshBot*. Keep that list short: anyone who can run it gets the bot token.
 
 `/relaystatus` carries nothing sensitive, so the plugin does not gate it further: anyone Discord lets run it gets an answer.
 
@@ -128,7 +128,6 @@ Two things to know:
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |
 | Free Company branches | at least one | Table on the Discord tab: one row per FC, with a label, the home world and Free Company name it is matched by (plus the FC tag as a label and extra check), and its own Discord server, relay channel and state channel. The plugin picks the row matching the logged-in character |
-| Roles allowed to use `/setupcode` | empty | Comma-separated Discord role names. Empty means nobody but members with Manage Server. Carried in the setup code, so export a new one after changing it |
 | Heartbeat (s) | 10 | How often this instance refreshes its presence message. Clamped to 10–120 |
 | Stale after (s) | 20 | How long a silent instance keeps its place in the queue, and how long this one keeps relaying without a successful heartbeat. Clamped to at least twice the heartbeat, at most 600 |
 
@@ -140,7 +139,7 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 
 - **The setup code contains the bot token**, whether it travels by clipboard or by DM. Treat it like a password: send it by **private message** only, never in a public or FC-wide channel, never in a screenshot, never in a pastebin. The plugin never shows it on screen and never writes it to the log — it only ever passes through your clipboard or through the DM it was sent in.
 - **A code sent with `/gilga send` is short-lived by design.** The DM is replaced with a receipt the moment the recipient's plugin connects successfully, and deleted 24 hours after it was sent if they never import it. `/gilga revoke` deletes every outstanding one at once. A code exported to the clipboard has none of that: it lives wherever you pasted it until you reset the token.
-- **A code fetched with `/setupcode` belongs to the officer who was relaying at the time.** Their plugin is the one that sent the DM, so their plugin is the one that expires it after 24 hours and the only one whose `/gilga revoke` can withdraw it early.
+- **A code fetched with `/setupcode` belongs to the officer who was relaying at the time.** Their plugin is the one that sent the DM, so their plugin is the one that deletes it after 5 minutes if it is not imported, and the only one whose `/gilga revoke` can withdraw it earlier.
 - If a setup code (or the token) leaks: **Bot → Reset Token** in the [Developer Portal](https://discord.com/developers/applications), paste the new token in the plugin, **Save token**, then **Export setup code** again and send the new code to every officer. The old code stops working the moment the token is reset.
 - The token is also stored in the plugin's config file (`%AppData%\XIVLauncher\pluginConfigs\GilgameshBot.json`). Do not share that file; if it leaks, reset the token as above.
 - Invite the bot with **View Channels** and **Send Messages** only, and do not grant it more later.
@@ -166,7 +165,6 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
 - **"The application did not respond" on `/setupcode` or `/relaystatus`** — nobody's plugin is connected to that branch right now, or the officers who are connected have not settled on a relaying instance yet (it takes a few seconds after a login). Only the officer whose plugin is currently relaying answers the commands. Check the bot's presence in the member list: grey means nobody is in game.
 - **The commands don't show up when typing `/`** — either the bot was invited without the `applications.commands` scope (open the OAuth2 URL again with both scopes; the plugin's log says *Missing Access* when registration fails), or the command is not allowed for your roles. Only members with **Manage Server** see it until the server owner adds roles under *Server Settings → Integrations → GilgameshBot → Command permissions*.
-- **"You need one of these roles: …"** — Discord let you run the command but the plugin's own allow-list does not list any of your roles. The officer who set the bot up must add the role on the Discord tab (*Roles allowed to use /setupcode*) and hand out a new setup code.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.
 
 ## For contributors

@@ -23,7 +23,6 @@ public sealed class ConfigWindow : Window, IDisposable
 
     // ImGui needs mutable buffers; IDs are edited as text and parsed on save.
     private string tokenBuffer;
-    private string setupCodeRolesBuffer = string.Empty;
     private bool showToken;
     private string? validationMessage;
 
@@ -295,38 +294,17 @@ public sealed class ConfigWindow : Window, IDisposable
         }
     }
 
-    /// <summary>
-    /// Who may run the bot's <c>/setupcode</c> command in Discord. The allow-list travels in the
-    /// setup code, so every officer's plugin enforces the same one.
-    /// </summary>
-    private void DrawSlashCommandSettings()
+    /// <summary>The bot's slash commands. Who may use them is decided in Discord, not here.</summary>
+    private static void DrawSlashCommandSettings()
     {
         SectionHeader("Discord commands");
 
         TextWrappedColoured(Grey,
-            "Members can ask the bot for a setup code with /setupcode, and who is relaying with "
-            + "/relaystatus. Both only work while at least one officer's plugin is connected.");
-        ImGuiHelpers.ScaledDummy(4);
-
-        ImGui.InputText("Roles allowed to use /setupcode (comma-separated)", ref setupCodeRolesBuffer, 512);
-
+            "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes) "
+            + "and see who is relaying with /relaystatus. Both only work while at least one member's plugin is connected.");
         ImGuiHelpers.ScaledDummy(2);
         TextWrappedColoured(Grey,
-            "Also open the command to those roles in Server Settings → Integrations → GilgameshBot. "
-            + "Left empty, only members with Manage Server can fetch a code.");
-        ImGuiHelpers.ScaledDummy(4);
-
-        if (!ImGui.Button("Save roles", ImGuiHelpers.ScaledVector2(180, 0)))
-            return;
-
-        config.SetupCodeRoleNames = setupCodeRolesBuffer
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        config.Save();
-
-        setupCodeRolesBuffer = string.Join(", ", config.SetupCodeRoleNames);
-        validationMessage = "Saved. Export a new setup code so the other officers get it too.";
+            "Choose which roles may use them in Server Settings → Integrations → GilgameshBot → Command permissions.");
     }
 
     private void DrawBranchTable()
@@ -715,7 +693,7 @@ public sealed class ConfigWindow : Window, IDisposable
             foreach (var entry in sent)
             {
                 var age = now - entry.SentAtUtc;
-                var state = age >= SetupCodeDelivery.Lifetime ? "expired" : "pending";
+                var state = now >= entry.ExpiresAtUtc ? "expired" : "pending";
                 var to = entry.To.Length > 0 ? entry.To : "someone";
                 TextColoured(Grey, $"{to} · {DescribeAge(age)} · {state}");
             }
@@ -811,7 +789,6 @@ public sealed class ConfigWindow : Window, IDisposable
     private void RefreshBuffersFromConfig()
     {
         tokenBuffer = config.BotToken;
-        setupCodeRolesBuffer = string.Join(", ", config.SetupCodeRoleNames);
         ClearBranchEditor();
     }
 

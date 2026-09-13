@@ -107,6 +107,9 @@ public sealed class SentSetupCode
     public string To { get; set; } = string.Empty;
 
     public DateTime SentAtUtc { get; set; }
+
+    /// <summary>When the sending plugin deletes the DM if it was not imported: 24 h after an in-game send, 5 min after /setupcode.</summary>
+    public DateTime ExpiresAtUtc { get; set; }
 }
 
 /// <summary>
@@ -146,16 +149,8 @@ public sealed class Configuration : IPluginConfiguration
     public List<FcBranch> Branches { get; set; } = [];
 
     /// <summary>
-    /// Discord role names allowed to run the <c>/setupcode</c> slash command, on top of Discord's
-    /// own command permissions. Empty (the default) means nobody but members with the
-    /// <em>Manage Server</em> permission. Compared trimmed and case-insensitively, and carried in
-    /// the setup code so every officer's plugin agrees.
-    /// </summary>
-    public List<string> SetupCodeRoleNames { get; set; } = [];
-
-    /// <summary>
     /// Setup codes handed out by DM that have not been imported yet. The plugin deletes each of
-    /// them 24 hours after it was sent, and on <c>/gilga revoke</c>.
+    /// them once <see cref="SentSetupCode.ExpiresAtUtc"/> passes, and on <c>/gilga revoke</c>.
     /// </summary>
     /// <remarks>
     /// Replaced wholesale rather than mutated in place: the settings window enumerates it on the

@@ -21,11 +21,10 @@ namespace GilgameshBot.Relay;
 /// <see cref="SocketInteraction.DeferAsync"/> and does the work on a background task.
 /// </para>
 /// <para>
-/// <c>/setupcode</c> is guarded twice. Discord's own command permissions decide who can see and
-/// run it (registered as Manage Server, widened by the server owner under Server Settings →
-/// Integrations), and the plugin additionally requires Manage Server or one of
-/// <see cref="Configuration.SetupCodeRoleNames"/>. The code itself only ever travels in the DM:
-/// it is never logged, never rendered, never put in the interaction reply.
+/// Who may run <c>/setupcode</c> is decided by Discord alone: the command is registered as
+/// Manage Server only, and the server owner opens it to roles under Server Settings →
+/// Integrations. The code itself only ever travels in the DM: it is never logged, never
+/// rendered, never put in the interaction reply.
 /// </para>
 /// </remarks>
 public sealed class SlashCommands
@@ -213,42 +212,12 @@ public sealed class SlashCommands
         if (command.User is not SocketGuildUser member)
             return "GilgameshBot could not read your server membership. Try again in a moment.";
 
-        if (!IsAllowed(member))
-        {
-            var allowed = config.SetupCodeRoleNames
-                .Select(r => MessageFormatter.EscapeMarkdown(r.Trim()))
-                .Where(r => r.Length > 0)
-                .ToList();
-
-            return allowed.Count == 0
-                ? "Only officers with the Manage Server permission can fetch a setup code. "
-                  + "Ask an officer to send you one."
-                : "You need one of these roles to fetch a setup code: " + string.Join(", ", allowed) + ".";
-        }
-
         var who = await CharacterLabelAsync();
-        var outcome = await SetupCodeDelivery.SendToUserAsync(member, config, who, log, ct);
+        var outcome = await SetupCodeDelivery.SendToUserAsync(member, config, who, SetupCodeDelivery.SlashLifetime, log, ct);
 
         return outcome.Ok
-            ? "Check your DMs 📬 — the code expires in 24 hours and is replaced with a receipt once you import it."
+            ? "Check your DMs 📬 — the code is deleted after 5 minutes, or replaced with a receipt as soon as you import it."
             : outcome.Message;
-    }
-
-    /// <summary>
-    /// The plugin's own allow-list, on top of Discord's command permissions: Manage Server (which
-    /// Administrator and the server owner both carry), or a role named in the setup code.
-    /// </summary>
-    private bool IsAllowed(SocketGuildUser member)
-    {
-        if (member.GuildPermissions.ManageGuild)
-            return true;
-
-        var allowed = config.SetupCodeRoleNames;
-        if (allowed.Count == 0)
-            return false;
-
-        return member.Roles.Any(role => allowed.Any(
-            name => string.Equals(name.Trim(), role.Name.Trim(), StringComparison.OrdinalIgnoreCase)));
     }
 
     private async Task<string> CharacterLabelAsync()

@@ -51,15 +51,6 @@ public sealed class SetupPayload
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
 
     /// <summary>
-    /// Discord role names allowed to run <c>/setupcode</c>. Optional: a code without it (any code
-    /// made before the slash commands existed) simply leaves the allow-list empty, which means
-    /// nobody but members with Manage Server.
-    /// </summary>
-    [JsonPropertyName("roles")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<string>? Roles { get; set; }
-
-    /// <summary>
     /// Set only on codes delivered by DM. Never required: an older plugin simply ignores it, and
     /// a code without one behaves exactly as before.
     /// </summary>
@@ -122,7 +113,6 @@ public static class SetupCode
                     State = b.StateChannelId.ToString(),
                 })
                 .ToList(),
-            Roles = NormaliseRoles(config.SetupCodeRoleNames) is { Count: > 0 } roles ? roles : null,
             Receipt = receipt,
         };
 
@@ -242,10 +232,6 @@ public static class SetupCode
             }
         }
 
-        // Free text from another officer's settings window: only ever trimmed and de-duplicated,
-        // never echoed back on a failure path.
-        parsed.Roles = NormaliseRoles(parsed.Roles);
-
         parsed.Token = parsed.Token.Trim();
 
         // Same clamps as the settings window, applied in the same order: the heartbeat first,
@@ -276,7 +262,6 @@ public static class SetupCode
                 StateChannelId = b.StateChannelId,
             })
             .ToList();
-        config.SetupCodeRoleNames = NormaliseRoles(payload.Roles);
         config.HeartbeatSeconds = payload.Heartbeat;
         config.StaleSeconds = payload.Stale;
 
@@ -294,14 +279,6 @@ public static class SetupCode
 
         config.Save();
     }
-
-    /// <summary>Trimmed, non-empty, case-insensitively distinct role names, order preserved.</summary>
-    private static List<string> NormaliseRoles(IEnumerable<string>? roles) =>
-        (roles ?? [])
-        .Select(r => (r ?? string.Empty).Trim())
-        .Where(r => r.Length > 0)
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
 
     private static string ToBase64Url(byte[] bytes) =>
         Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');

@@ -19,17 +19,20 @@ public readonly record struct SetupCodeOutcome(bool Ok, string Message);
 /// The DM carries the bot token, exactly like the clipboard code does, so it is treated as a
 /// short-lived secret: the importing plugin replaces the message with a receipt on its first
 /// successful connect, and the sending plugin deletes any message that was never imported after
-/// <see cref="Lifetime"/>. Nothing here is ever logged or printed — not the code, not any part
+/// its lifetime (<see cref="InGameLifetime"/> or <see cref="SlashLifetime"/>). Nothing here is ever logged or printed — not the code, not any part
 /// of it. This class owns no state: the caller passes in the live client, the guild, the config
 /// and the character label.
 /// </remarks>
 public static class SetupCodeDelivery
 {
-    /// <summary>How long an unimported setup code DM is allowed to live.</summary>
-    public static readonly TimeSpan Lifetime = TimeSpan.FromHours(24);
+    /// <summary>How long a code sent from in-game (/gilga send) may sit unimported in the DM.</summary>
+    public static readonly TimeSpan InGameLifetime = TimeSpan.FromHours(24);
 
-    /// <summary>How often the expiry sweep runs while connected.</summary>
-    public static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(10);
+    /// <summary>How long a code fetched with /setupcode may sit unimported: the member asked for it just now.</summary>
+    public static readonly TimeSpan SlashLifetime = TimeSpan.FromMinutes(5);
+
+    /// <summary>How often the expiry sweep runs while connected; short enough for the 5-minute codes.</summary>
+    public static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>A receipt starts with this; used to tell a scrubbed DM from one still carrying a code.</summary>
     private const string ReceiptMarker = "✅";
@@ -80,7 +83,7 @@ public static class SetupCodeDelivery
         if (user is null)
             return new SetupCodeOutcome(false, $"No member named {name} in {guild.Name}.");
 
-        return await SendToUserAsync(user, config, characterLabel, log, ct);
+        return await SendToUserAsync(user, config, characterLabel, InGameLifetime, log, ct);
     }
 
     /// <summary>
@@ -93,6 +96,7 @@ public static class SetupCodeDelivery
         IUser user,
         Configuration config,
         string characterLabel,
+        TimeSpan lifetime,
         IPluginLog log,
         CancellationToken ct)
     {
@@ -138,6 +142,7 @@ public static class SetupCodeDelivery
             MessageId = message.Id,
             To = displayName,
             SentAtUtc = DateTime.UtcNow,
+            ExpiresAtUtc = DateTime.UtcNow + lifetime,
         };
 
         Remember(config, entry);
@@ -147,7 +152,7 @@ public static class SetupCodeDelivery
                    + $"sent by {MessageFormatter.EscapeMarkdown(characterLabel)}.\n"
                    + "Copy the line below, then in game type `/gilga import`.\n"
                    + "This message is replaced with a receipt once you import it, "
-                   + "and is deleted after 24 hours if you don't.\n\n"
+                   + $"and is deleted after {Describe(lifetime)} if you don't.\n\n"
                    + SetupCode.Encode(config, new SetupReceipt
                    {
                        Channel = dm.Id.ToString(),
@@ -178,7 +183,7 @@ public static class SetupCodeDelivery
             return new SetupCodeOutcome(false, $"Could not finish the DM to {displayName}. Share the code by clipboard instead.");
         }
 
-        return new SetupCodeOutcome(true, $"Setup code sent to {displayName} by DM. It expires in 24 hours.");
+        return new SetupCodeOutcome(true, $"Setup code sent to {displayName} by DM. It expires in {Describe(lifetime)}.");
     }
 
     // --- Expiry and revocation ---------------------------------------------------------------
@@ -202,14 +207,14 @@ public static class SetupCodeDelivery
         if (entries.Length == 0)
             return 0;
 
-        var cutoff = DateTime.UtcNow - Lifetime;
+        var now = DateTime.UtcNow;
         var revoked = 0;
 
         foreach (var entry in entries)
         {
             ct.ThrowIfCancellationRequested();
 
-            if (!all && entry.SentAtUtc > cutoff)
+            if (!all && entry.ExpiresAtUtc > now)
                 continue;
 
             try
@@ -299,6 +304,9 @@ public static class SetupCodeDelivery
     }
 
     // --- Helpers -------------------------------------------------------------------------------
+
+    private static string Describe(TimeSpan lifetime) =>
+        lifetime.TotalHours >= 1 ? $"{(int)lifetime.TotalHours} hours" : $"{(int)lifetime.TotalMinutes} minutes";
 
     /// <summary>
     /// The DM channel with the given id, over REST. The socket client caches no DM channels
