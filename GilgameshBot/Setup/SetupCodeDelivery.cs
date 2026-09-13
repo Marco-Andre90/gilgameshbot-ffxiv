@@ -110,13 +110,15 @@ public static class SetupCodeDelivery
         // Tracked from the moment a message id exists, before the edit that puts the code in it:
         // a DM the plugin has forgotten about would never expire, while a tracked placeholder is
         // harmlessly dropped by the next sweep.
-        Remember(config, new SentSetupCode
+        var entry = new SentSetupCode
         {
             ChannelId = dm.Id,
             MessageId = message.Id,
             To = displayName,
             SentAtUtc = DateTime.UtcNow,
-        });
+        };
+
+        Remember(config, entry);
 
         var branches = string.Join(", ", config.Branches.Where(b => b.IsComplete).Select(b => b.Name));
         var body = $"🎮 **GilgameshBot setup code** for {MessageFormatter.EscapeMarkdown(branches)}, "
@@ -130,6 +132,16 @@ public static class SetupCodeDelivery
                        Message = message.Id.ToString(),
                    });
 
+        // Discord's own limit. Each branch costs a few hundred base64 characters, so an officer
+        // with a long branch table hits this — and a bare 400 from Discord would explain nothing.
+        if (body.Length > MessageFormatter.MaxLength)
+        {
+            await AbandonAsync(config, message, entry, log);
+            return new SetupCodeOutcome(false,
+                "The setup code is too long to fit in one Discord message — you have too many branches. "
+                + "Use Export setup code and share it by private message instead.");
+        }
+
         try
         {
             await message.ModifyAsync(m => m.Content = body, new RequestOptions { CancelToken = ct });
@@ -137,8 +149,10 @@ public static class SetupCodeDelivery
         catch (Exception ex)
         {
             // Never log the exception's content here beyond its type: the request body carried
-            // the code. The placeholder stays tracked and the sweep will tidy it away.
+            // the code. Take the placeholder back down rather than leaving the recipient looking
+            // at "Preparing…" until the 24-hour sweep gets to it.
             log.Warning("Could not write the setup code into the DM ({Type}).", ex.GetType().Name);
+            await AbandonAsync(config, message, entry, log);
             return new SetupCodeOutcome(false, $"Could not finish the DM to {displayName}. Share the code by clipboard instead.");
         }
 
@@ -271,6 +285,26 @@ public static class SetupCodeDelivery
     private static async Task<IDMChannel?> GetDmChannelAsync(
         DiscordSocketClient client, ulong channelId, CancellationToken ct) =>
         await client.Rest.GetChannelAsync(channelId, new RequestOptions { CancelToken = ct }) as IDMChannel;
+
+    /// <summary>
+    /// Takes a placeholder back down when the code never made it into the message, and forgets
+    /// the entry. Best effort: a placeholder left behind carries no code, and the sweep will
+    /// drop the entry anyway.
+    /// </summary>
+    private static async Task AbandonAsync(
+        Configuration config, IUserMessage message, SentSetupCode entry, IPluginLog log)
+    {
+        try
+        {
+            await message.DeleteAsync();
+        }
+        catch (Exception ex)
+        {
+            log.Debug("Could not withdraw the placeholder DM ({Type}).", ex.GetType().Name);
+        }
+
+        Forget(config, entry);
+    }
 
     private static void Remember(Configuration config, SentSetupCode entry)
     {

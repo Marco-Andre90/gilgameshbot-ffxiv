@@ -600,8 +600,12 @@ public sealed class DiscordBridge : IDisposable
         if (config.PendingReceipt is null)
             return;
 
+        // Read before the first await: nobody waits for this task, so the session's token source
+        // may already have been disposed by a teardown by the time the label comes back.
+        var ct = s.Cts.Token;
+
         var who = await CharacterLabelAsync();
-        await SetupCodeDelivery.ApplyPendingReceiptAsync(s.Client, config, who, log, s.Cts.Token);
+        await SetupCodeDelivery.ApplyPendingReceiptAsync(s.Client, config, who, log, ct);
     }
 
     /// <summary>

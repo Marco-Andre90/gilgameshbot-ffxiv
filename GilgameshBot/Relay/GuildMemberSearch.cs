@@ -35,11 +35,11 @@ internal static class GuildMemberSearch
     /// <summary>Search and match in one go, for callers with a complete name and no cache.</summary>
     public static async Task<RestGuildUser?> FindAsync(SocketGuild guild, string name, CancellationToken ct)
     {
-        var trimmed = name.Trim();
-        if (trimmed.Length == 0)
+        // Typed by hand, so collapse runs of spaces: "Justice  Archon" is the same person.
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (words.Length == 0)
             return null;
 
-        var firstWord = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
-        return MatchExact(await SearchAsync(guild, firstWord, ct), trimmed);
+        return MatchExact(await SearchAsync(guild, words[0], ct), string.Join(' ', words));
     }
 }
