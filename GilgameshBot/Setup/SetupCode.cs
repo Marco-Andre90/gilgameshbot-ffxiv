@@ -172,6 +172,13 @@ public static class SetupCode
                 return false;
             }
 
+            if (stateChannelId == channelId)
+            {
+                error = "One of the Free Company branches in the setup code uses its relay channel as the state channel; "
+                        + "they must be different channels. Ask the officer who set the bot up for a new code.";
+                return false;
+            }
+
             branch.Name = branch.Name.Trim();
             branch.World = branch.World.Trim();
             branch.FcName = branch.FcName.Trim();

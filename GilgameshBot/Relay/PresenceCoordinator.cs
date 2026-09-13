@@ -1,4 +1,6 @@
+using System.Net;
 using Discord;
+using Discord.Net;
 using Discord.WebSocket;
 using Dalamud.Plugin.Services;
 
@@ -48,12 +50,8 @@ public sealed class PresenceCoordinator
     /// <summary>Presence messages older than this are debris from crashed instances.</summary>
     private static readonly TimeSpan CleanupAge = TimeSpan.FromMinutes(10);
 
-    /// <summary>
-    /// How many consecutive fetches must miss our own message before we accept it as really gone.
-    /// A single miss is almost always Discord's message list being briefly eventually-consistent;
-    /// re-posting on it would move us to a new snowflake and disturb stable leadership.
-    /// </summary>
-    private const int OwnMissingConfirmations = 3;
+    /// <summary>How many recent messages are read to build the presence list.</summary>
+    private const int FetchWindow = 100;
 
     private readonly Configuration config;
     private readonly IPluginLog log;
@@ -68,7 +66,7 @@ public sealed class PresenceCoordinator
     private int beat;
     private long lastHeartbeatOkTicks;
     private DateTimeOffset lastServerNow;
-    private int ownMissingStreak;
+    private bool dedicatedWarned;
 
     /// <summary>Every presence message id this instance has ever posted (forfeits re-post under a new id).</summary>
     private readonly HashSet<ulong> ownIds = [];
@@ -316,27 +314,41 @@ public sealed class PresenceCoordinator
             return;
         }
 
+        if (own is not null && presence.All(m => m.Id != own.Id))
+        {
+            // Our message is not in the window. That is not proof of deletion: the list only
+            // covers the newest messages, and Discord's list is briefly eventually-consistent
+            // after a post or edit. Ask for the message by id, which is authoritative.
+            var (check, direct) = await CheckOwnDirectAsync(own.Id, ct);
+            switch (check)
+            {
+                case OwnCheck.Present:
+                    presence.Add(direct!);
+                    WarnNotDedicatedOnce("this instance's presence message fell outside the newest "
+                                         + FetchWindow + " messages");
+                    break;
+
+                case OwnCheck.Forbidden:
+                    ReportHistoryProblem();
+                    SetLeadership(false);
+                    return;
+
+                case OwnCheck.Gone:
+                    log.Warning("This instance's presence message is gone; re-posting at the back of the queue.");
+                    own = null;
+                    SetLeadership(false);
+                    await PostOwnAsync(ct);
+                    return;
+
+                default:
+                    // Transient failure: keep the previous decision; the lease still expires if it persists.
+                    return;
+            }
+        }
+
         if (presence.Count == 0)
         {
-            if (own is not null)
-            {
-                // We just posted (or edited) our message successfully and still see nothing:
-                // Discord returns an EMPTY list, not an error, when the bot lacks Read Message
-                // History in the channel. Re-posting would only pile up messages we can't see,
-                // so stand down, keep heartbeating the one we have, and say what is missing.
-                if (!historyProblemReported)
-                {
-                    historyProblemReported = true;
-                    var problem = $"The bot cannot read #{stateChannel.Name}: give it Read Message History "
-                                  + "(and View Channel) on the state channel. Relaying is paused until then.";
-                    log.Error("{Problem}", problem);
-                    reportProblem(problem);
-                }
-
-                SetLeadership(false);
-                return;
-            }
-
+            // Nothing of ours is up (the post failed earlier): try again.
             await PostOwnAsync(ct);
             return;
         }
@@ -358,31 +370,6 @@ public sealed class PresenceCoordinator
             serverNow = lastServerNow;
 
         await CleanUpAsync(presence, serverNow, ct);
-
-        if (own is not null && presence.All(m => m.Id != own.Id))
-        {
-            // Our message is not in this fetch. A GetMessages call is eventually-consistent and
-            // can briefly omit a message we just posted or edited, so a single miss is not proof
-            // of deletion — and a real deletion is caught anyway by the very next heartbeat edit
-            // failing. Keep the slot and the previous leadership decision until several fetches in
-            // a row miss it; re-posting on a transient miss is what starts leadership churn and a
-            // storm of "Online" announcements.
-            if (++ownMissingStreak < OwnMissingConfirmations)
-            {
-                log.Debug("Presence fetch did not include this instance's message; treating as transient ({Streak}).",
-                    ownMissingStreak);
-                return;
-            }
-
-            log.Warning("This instance's presence message is gone; re-posting at the back of the queue.");
-            ownMissingStreak = 0;
-            own = null;
-            SetLeadership(false);
-            await PostOwnAsync(ct);
-            return;
-        }
-
-        ownMissingStreak = 0;
 
         var stale = TimeSpan.FromSeconds(StaleSeconds);
         var alive = presence
@@ -449,23 +436,83 @@ public sealed class PresenceCoordinator
 
     // --- helpers ------------------------------------------------------------------------
 
+    private enum OwnCheck { Present, Gone, Forbidden, Unknown }
+
+    /// <summary>Fetches our own presence message by id. Authoritative, unlike the list.</summary>
+    private async Task<(OwnCheck Check, IMessage? Message)> CheckOwnDirectAsync(ulong id, CancellationToken ct)
+    {
+        try
+        {
+            var message = await ((IMessageChannel)stateChannel)
+                .GetMessageAsync(id, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct });
+            return message is null ? (OwnCheck.Gone, null) : (OwnCheck.Present, message);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (HttpException ex) when (ex.HttpCode == HttpStatusCode.Forbidden
+                                       || ex.DiscordCode == DiscordErrorCode.MissingPermissions)
+        {
+            return (OwnCheck.Forbidden, null);
+        }
+        catch (Exception ex)
+        {
+            log.Debug(ex, "Could not fetch this instance's presence message by id.");
+            return (OwnCheck.Unknown, null);
+        }
+    }
+
+    private void ReportHistoryProblem()
+    {
+        if (historyProblemReported)
+            return;
+
+        historyProblemReported = true;
+        var problem = $"The bot cannot read #{stateChannel.Name}: give it Read Message History "
+                      + "(and View Channel) on the state channel. Relaying is paused until then.";
+        log.Error("{Problem}", problem);
+        reportProblem(problem);
+    }
+
+    /// <summary>
+    /// The state channel must carry presence messages only: the leader is computed from the
+    /// newest <see cref="FetchWindow"/> messages, and any other traffic pushes presence messages
+    /// out of that window, which makes instances disagree about who leads.
+    /// </summary>
+    private void WarnNotDedicatedOnce(string evidence)
+    {
+        if (dedicatedWarned)
+            return;
+
+        dedicatedWarned = true;
+        log.Warning("State channel #{Channel} is not dedicated to presence ({Evidence}). "
+                    + "Use a separate hidden channel that nobody posts in.", stateChannel.Name, evidence);
+    }
+
     private async Task<List<IMessage>> FetchPresenceAsync(CancellationToken ct)
     {
         // Through IMessageChannel so CacheMode can be stated explicitly: presence is only correct
         // with fresh edit timestamps, and the socket overload would prefer the (empty) cache.
-        var messages = await ((IMessageChannel)stateChannel)
-            .GetMessagesAsync(100, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
-            .FlattenAsync();
+        var messages = (await ((IMessageChannel)stateChannel)
+            .GetMessagesAsync(FetchWindow, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
+            .FlattenAsync()).ToList();
 
         // Without our own user id every message would be filtered out, and an empty result is
-        // read as "our message was deleted" → re-post. Treat it as a failed fetch instead.
+        // read as "our message was deleted" -> re-post. Treat it as a failed fetch instead.
         var self = client.CurrentUser?.Id
                    ?? throw new InvalidOperationException("Bot user is not available yet.");
 
-        return messages
+        var presence = messages
             .Where(m => m.Author.Id == self
                         && m.Content is { } c && c.StartsWith(Prefix, StringComparison.Ordinal))
             .ToList();
+
+        var foreign = messages.Count - presence.Count;
+        if (foreign > 0)
+            WarnNotDedicatedOnce($"{foreign} of the newest {messages.Count} messages are not presence messages");
+
+        return presence;
     }
 
     private static DateTimeOffset LastTouched(IMessage message) => message.EditedTimestamp ?? message.Timestamp;

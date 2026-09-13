@@ -110,6 +110,14 @@ public sealed class DiscordBridge : IDisposable
                 return;
             }
 
+            if (branch.StateChannelId == branch.ChannelId)
+            {
+                LastError = $"Branch {branch.Describe()} uses its relay channel as the state channel. "
+                            + "It needs a separate, hidden state channel; import a new setup code.";
+                log.Warning("{Error}", LastError);
+                return;
+            }
+
             LastError = null;
             State = BridgeState.Connecting;
 
