@@ -45,6 +45,12 @@ public sealed class PresenceCoordinator
     /// <summary>Marks a message as a presence message. Combined with "authored by this bot".</summary>
     private const string Prefix = "🎮 ";
 
+    /// <summary>
+    /// Follows the prefix: <c>[relayChannelId] </c>. Several branches may share one state
+    /// channel; only presence messages carrying our own branch tag take part in our election.
+    /// </summary>
+    private readonly string branchTag;
+
     private const string BeatSeparator = " · beat ";
 
     /// <summary>Presence messages older than this are debris from crashed instances.</summary>
@@ -84,9 +90,11 @@ public sealed class PresenceCoordinator
         IPluginLog log,
         DiscordSocketClient client,
         SocketTextChannel stateChannel,
+        ulong relayChannelId,
         Func<Task<string>> characterLabelProvider,
         Action<string?> reportProblem)
     {
+        branchTag = $"[{relayChannelId}] ";
         this.reportProblem = reportProblem;
         this.config = config;
         this.log = log;
@@ -186,7 +194,7 @@ public sealed class PresenceCoordinator
 
         try
         {
-            var presence = await FetchPresenceAsync(ct);
+            var (presence, _) = await FetchPresenceAsync(ct);
 
             // Our own message is gone, so the newest remaining edit may itself be stale.
             // Anchor on the last server time we observed while heartbeating.
@@ -299,9 +307,10 @@ public sealed class PresenceCoordinator
     private async Task RefreshAsync(CancellationToken ct)
     {
         List<IMessage> presence;
+        List<IMessage> allPresence;
         try
         {
-            presence = await FetchPresenceAsync(ct);
+            (presence, allPresence) = await FetchPresenceAsync(ct);
         }
         catch (OperationCanceledException)
         {
@@ -369,7 +378,8 @@ public sealed class PresenceCoordinator
         else
             serverNow = lastServerNow;
 
-        await CleanUpAsync(presence, serverNow, ct);
+        // Debris from any branch may be removed; the channel is shared.
+        await CleanUpAsync(allPresence, serverNow, ct);
 
         var stale = TimeSpan.FromSeconds(StaleSeconds);
         var alive = presence
@@ -490,7 +500,11 @@ public sealed class PresenceCoordinator
                     + "Use a separate hidden channel that nobody posts in.", stateChannel.Name, evidence);
     }
 
-    private async Task<List<IMessage>> FetchPresenceAsync(CancellationToken ct)
+    /// <summary>
+    /// Newest messages of the state channel, split into this branch's presence messages and
+    /// every presence message (all branches) for clean-up.
+    /// </summary>
+    private async Task<(List<IMessage> Mine, List<IMessage> All)> FetchPresenceAsync(CancellationToken ct)
     {
         // Through IMessageChannel so CacheMode can be stated explicitly: presence is only correct
         // with fresh edit timestamps, and the socket overload would prefer the (empty) cache.
@@ -503,26 +517,30 @@ public sealed class PresenceCoordinator
         var self = client.CurrentUser?.Id
                    ?? throw new InvalidOperationException("Bot user is not available yet.");
 
-        var presence = messages
+        var all = messages
             .Where(m => m.Author.Id == self
                         && m.Content is { } c && c.StartsWith(Prefix, StringComparison.Ordinal))
             .ToList();
 
-        var foreign = messages.Count - presence.Count;
+        var mine = all
+            .Where(m => m.Content.AsSpan(Prefix.Length).StartsWith(branchTag, StringComparison.Ordinal))
+            .ToList();
+
+        var foreign = messages.Count - all.Count;
         if (foreign > 0)
             WarnNotDedicatedOnce($"{foreign} of the newest {messages.Count} messages are not presence messages");
 
-        return presence;
+        return (mine, all);
     }
 
     private static DateTimeOffset LastTouched(IMessage message) => message.EditedTimestamp ?? message.Timestamp;
 
-    private string BuildContent() => $"{Prefix}{label}{BeatSeparator}{beat}";
+    private string BuildContent() => $"{Prefix}{branchTag}{label}{BeatSeparator}{beat}";
 
     /// <summary>Reads the character label back out of a peer's presence message.</summary>
-    private static string ExtractLabel(string content)
+    private string ExtractLabel(string content)
     {
-        var body = content[Prefix.Length..];
+        var body = content[(Prefix.Length + branchTag.Length)..];
         var cut = body.LastIndexOf(BeatSeparator, StringComparison.Ordinal);
         return (cut < 0 ? body : body[..cut]).Trim();
     }
