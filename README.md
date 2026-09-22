@@ -68,7 +68,7 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
 
    **Alternative — the clipboard.** On the **Status** tab, click **Export setup code** — the code is copied to your clipboard — and send it to your fellow members **by private message**. This code carries no receipt: it neither expires nor can be revoked, so prefer the DM path when you can.
 
-The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>`, and the Status tab shows `Branch: Kraken («KRKN» Kraken Company @ Behemoth)`.
+The channel should receive `🟢 GilgameshBot Online! Relaying Free Company chat via <Character> @ <World>. v<version>`, and the Status tab shows `Branch: Kraken («KRKN» Kraken Company @ Behemoth)`.
 
 Members with characters in more than one branch need nothing extra: one setup code covers all of them, and the plugin switches branch when they switch character.
 

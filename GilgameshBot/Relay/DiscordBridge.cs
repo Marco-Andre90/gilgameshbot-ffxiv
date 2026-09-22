@@ -347,6 +347,13 @@ public sealed class DiscordBridge : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// <c>v0.11.0</c>: the release workflow stamps the version into the assembly
+    /// (<c>-p:Version=x.y.z.0</c>), so the fourth part is dropped.
+    /// </summary>
+    private static readonly string PluginVersion =
+        typeof(DiscordBridge).Assembly.GetName().Version is { } v ? $"v{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+
     private async Task AnnounceOnlineAsync(Session s, SocketTextChannel textChannel)
     {
         try
@@ -356,7 +363,7 @@ public sealed class DiscordBridge : IDisposable
             s.AnnouncedVia = who; // remembered for the Offline notice: the game state may be gone by then
 
             await textChannel.SendMessageAsync(
-                $"🟢 **GilgameshBot Online!** Relaying Free Company chat via {MessageFormatter.EscapeMarkdown(who)}.",
+                $"🟢 **GilgameshBot Online!** Relaying Free Company chat via {MessageFormatter.EscapeMarkdown(who)}. {PluginVersion}",
                 allowedMentions: AllowedMentions.None,
                 options: new RequestOptions { CancelToken = s.Cts.Token });
         }
