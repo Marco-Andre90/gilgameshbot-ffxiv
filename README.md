@@ -104,19 +104,30 @@ The state channel fills up with one short message per running plugin (`🎮 [rel
 
 ## Discord commands
 
-The bot answers two slash commands in each branch's Discord server.
+The bot answers three slash commands in each branch's Discord server.
 
 | Command | Effect |
 |---|---|
 | `/setupcode` | The bot DMs you your own setup code, exactly as `/gilga send` would. The reply in the channel is ephemeral (only you see it) and never contains the code. The DM is deleted after 5 minutes if you don't import it, and replaced with a receipt as soon as you do |
 | `/relaystatus` | Ephemeral reply: which character is relaying this branch right now, how many members are on standby, and the branch name |
+| `/fcscan world` | Runs a [roster scan](#fc-roster) of the Free Company on that home world (the list offers the worlds set up on this server). The report goes to the roster channel; the ephemeral reply says how it went |
 
 Two things to know:
 
 - **They only work while at least one member's plugin is connected.** The bot has no server of its own — it runs inside the plugin. With nobody in game, Discord shows *"The application did not respond"*.
 - **`/setupcode` is gated by Discord.** Its command permissions decide who can see and run it: **Manage Server** until the server owner opens it to specific roles under *Server Settings → Integrations → GilgameshBot*. Keep that list short: anyone who can run it gets the bot token.
 
-`/relaystatus` carries nothing sensitive, so the plugin does not gate it further: anyone Discord lets run it gets an answer.
+`/relaystatus` and `/fcscan` carry nothing sensitive, so the plugin does not gate them further: anyone Discord lets run them gets an answer.
+
+## FC roster
+
+A manual scan reads a Free Company's member list from its public Lodestone page and compares it with the previous scan, to keep track of how long new members have been in the rank they join in (for example before promoting them to a trusted rank).
+
+- **Set it up** on the plugin's *FC roster* tab, per Free Company: its **Lodestone ID** (the number in `…/lodestone/freecompany/<ID>/`; *Use my FC* reads it from your character), its **starter rank** as spelled on the Lodestone (the game's default is `Member`), and the **roster channel**. These travel in the setup code like the rest of the branch.
+- **Roster channel.** One channel can serve every Free Company on the server, but not the relay or state channel. Create it empty: the bot's first message there is the **state message**, holding one `roster-<lodestone id>.json` per Free Company, and it stays on top. In a channel that already has messages the bot pins it instead, which needs *Pin Messages*. Only the bot edits it; do not delete it, or the next scan starts over. The bot also needs *View Channel*, *Send Messages*, *Attach Files* and *Read Message History* there.
+- **Scan** with *Scan now* on that tab or `/fcscan` in Discord. Either way someone's plugin must be connected; any member's will do, whatever branch they are on. A scan reads about one Lodestone page per second (50 members each).
+- **The report** lists who joined and who left since the last scan, and everyone in the starter rank with how long they have been in it, longest first. The first scan only records the list: members already in the starter rank show *before* the date of the first scan.
+- **Limits.** The Lodestone lags the game by a few hours, and a date is the scan that first saw the change, so scan every week or two rather than expecting exact days. If the Lodestone is down, answers with an incomplete list, or changes during the scan, nothing is posted or saved: try again later.
 
 ## Options
 
@@ -167,7 +178,7 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **"The bot cannot read #state-channel"** / connected but on standby with no leader — the bot is missing **Read Message History** on the state channel. Discord answers an empty list instead of an error in that case, so the plugin cannot see its own presence message. Grant the permission (channel → Edit → Permissions → the bot's role), then delete any leftover presence messages in that channel.
 - **Two members, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
-- **"The application did not respond" on `/setupcode` or `/relaystatus`** — nobody's plugin is connected to that branch right now, or the members who are connected have not settled on a relaying instance yet (it takes a few seconds after a login). Only the member whose plugin is currently relaying answers the commands. Check the bot's presence in the member list: grey means nobody is in game.
+- **"The application did not respond" on `/setupcode`, `/relaystatus` or `/fcscan`** — nobody's plugin is connected to that branch right now, or the members who are connected have not settled on a relaying instance yet (it takes a few seconds after a login). Only the member whose plugin is currently relaying answers the commands. Check the bot's presence in the member list: grey means nobody is in game.
 - **The commands don't show up when typing `/`** — either the bot was invited without the `applications.commands` scope (open the OAuth2 URL again with both scopes; the plugin's log says *Missing Access* when registration fails), or the command is not allowed for your roles. Only members with **Manage Server** see it until the server owner adds roles under *Server Settings → Integrations → GilgameshBot → Command permissions*.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.
 

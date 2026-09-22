@@ -405,6 +405,16 @@ public sealed class Plugin : IDalamudPlugin
         return world.Length > 0 && fcName.Length > 0 && tag.Length > 0;
     }
 
+    /// <summary>
+    /// Like <see cref="TryReadBranchKey"/>, plus the Free Company's ID, which is also its
+    /// Lodestone ID. Framework thread only.
+    /// </summary>
+    public static bool TryReadFreeCompanyId(out string world, out string tag, out string fcName, out ulong fcId)
+    {
+        (world, tag, fcName, fcId) = ReadCharacterBranchKey();
+        return world.Length > 0 && fcName.Length > 0 && tag.Length > 0 && fcId != 0;
+    }
+
     // --- Events and commands ----------------------------------------------------------------
 
     private void OnLogin()

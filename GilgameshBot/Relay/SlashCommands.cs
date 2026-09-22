@@ -2,12 +2,13 @@ using Dalamud.Plugin.Services;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
+using GilgameshBot.Roster;
 using GilgameshBot.Setup;
 
 namespace GilgameshBot.Relay;
 
 /// <summary>
-/// The bot's own Discord slash commands: <c>/setupcode</c> and <c>/relaystatus</c>.
+/// The bot's own Discord slash commands: <c>/setupcode</c>, <c>/relaystatus</c> and <c>/fcscan</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -31,9 +32,12 @@ public sealed class SlashCommands
 {
     public const string SetupCodeCommand = "setupcode";
     public const string RelayStatusCommand = "relaystatus";
+    public const string FcScanCommand = "fcscan";
 
     private const string SetupCodeDescription = "Get your GilgameshBot setup code as a direct message.";
     private const string RelayStatusDescription = "Show who is relaying Free Company chat right now.";
+    private const string FcScanDescription = "Scan a Free Company's members on the Lodestone. Needs a member's plugin online.";
+    private const string WorldOption = "world";
 
     private readonly Configuration config;
     private readonly IPluginLog log;
@@ -78,11 +82,20 @@ public sealed class SlashCommands
             }
 
             await guild.BulkOverwriteApplicationCommandAsync(
-                [Build(SetupCodeCommand, SetupCodeDescription), Build(RelayStatusCommand, RelayStatusDescription)],
+                [
+                    Build(SetupCodeCommand, SetupCodeDescription),
+                    Build(RelayStatusCommand, RelayStatusDescription),
+                    Build(FcScanCommand, FcScanDescription, b => b.AddOption(new SlashCommandOptionBuilder()
+                        .WithName(WorldOption)
+                        .WithDescription("Home world of the Free Company to scan.")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(true)
+                        .WithAutocomplete(true))),
+                ],
                 new RequestOptions { CancelToken = ct });
 
-            log.Information("Registered the /{Setup} and /{Status} commands in {Guild}.",
-                SetupCodeCommand, RelayStatusCommand, guild.Name);
+            log.Information("Registered the /{Setup}, /{Status} and /{Scan} commands in {Guild}.",
+                SetupCodeCommand, RelayStatusCommand, FcScanCommand, guild.Name);
         }
         catch (OperationCanceledException)
         {
@@ -101,8 +114,10 @@ public sealed class SlashCommands
         }
     }
 
-    private static ApplicationCommandProperties Build(string name, string description) =>
-        new SlashCommandBuilder()
+    private static ApplicationCommandProperties Build(
+        string name, string description, Action<SlashCommandBuilder>? extra = null)
+    {
+        var builder = new SlashCommandBuilder()
             .WithName(name)
             .WithDescription(description)
             // Only members with Manage Server see the commands until the server owner opens them
@@ -110,17 +125,25 @@ public sealed class SlashCommands
             .WithDefaultMemberPermissions(GuildPermission.ManageGuild)
             // Guild only. WithDMPermission(false) says the same thing but is deprecated in
             // Discord.Net 3.20 in favour of the context types.
-            .WithContextTypes(InteractionContextType.Guild)
-            .Build();
+            .WithContextTypes(InteractionContextType.Guild);
 
-    /// <summary>True when the server already carries exactly the two commands as we want them.</summary>
+        extra?.Invoke(builder);
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// True when the server already carries exactly our commands. The set is the same on every
+    /// server and for every configuration (the /fcscan worlds come from autocomplete, not from
+    /// registered choices), so two officers with different settings never overwrite each other.
+    /// </summary>
     private static bool Matches(IReadOnlyCollection<SocketApplicationCommand> existing)
     {
-        if (existing.Count != 2)
+        if (existing.Count != 3)
             return false;
 
         return IsOurs(existing, SetupCodeCommand, SetupCodeDescription)
-               && IsOurs(existing, RelayStatusCommand, RelayStatusDescription);
+               && IsOurs(existing, RelayStatusCommand, RelayStatusDescription)
+               && IsOurs(existing, FcScanCommand, FcScanDescription);
     }
 
     /// <summary>
@@ -148,7 +171,7 @@ public sealed class SlashCommands
             return;
 
         var name = command.Data.Name;
-        if (name != SetupCodeCommand && name != RelayStatusCommand)
+        if (name != SetupCodeCommand && name != RelayStatusCommand && name != FcScanCommand)
             return;
 
         try
@@ -174,9 +197,12 @@ public sealed class SlashCommands
     {
         try
         {
-            var reply = name == SetupCodeCommand
-                ? await RunSetupCodeAsync(command, ct)
-                : DescribeRelayStatus();
+            var reply = name switch
+            {
+                SetupCodeCommand => await RunSetupCodeAsync(command, ct),
+                FcScanCommand => await RunFcScanAsync(command, ct),
+                _ => DescribeRelayStatus(),
+            };
 
             await command.FollowupAsync(
                 reply,
@@ -235,6 +261,58 @@ public sealed class SlashCommands
             log.Debug(ex, "Could not read the character label.");
             return "an officer";
         }
+    }
+
+    // --- /fcscan -------------------------------------------------------------------------------
+
+    /// <summary>The branches on this server that can be scanned; the /fcscan world list.</summary>
+    private List<FcBranch> ScannableBranches() =>
+        config.Branches.Where(b => b.GuildId == guild.Id && b.IsRosterConfigured).ToList();
+
+    /// <summary>
+    /// Entry point for <see cref="BaseSocketClient.AutocompleteExecuted"/>: offers the worlds of
+    /// this server's scannable branches. Answered by the leader only, like the commands.
+    /// </summary>
+    public async Task HandleAutocompleteAsync(SocketAutocompleteInteraction interaction, CancellationToken ct)
+    {
+        if (interaction.GuildId != branch.GuildId || !coordinator.IsLeader || ct.IsCancellationRequested
+            || interaction.Data.CommandName != FcScanCommand)
+            return;
+
+        var typed = interaction.Data.Current.Value?.ToString()?.Trim() ?? string.Empty;
+        var results = ScannableBranches()
+            .Select(b => b.World.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(w => w.Contains(typed, StringComparison.OrdinalIgnoreCase))
+            .Take(25)
+            .Select(w => new AutocompleteResult(w, w));
+
+        try
+        {
+            await interaction.RespondAsync(results, new RequestOptions { CancelToken = ct });
+        }
+        catch (HttpException ex) when (IsAlreadyAcknowledged(ex))
+        {
+            // Two branches on one server: the other leader answered.
+        }
+        catch (Exception ex)
+        {
+            log.Debug(ex, "Could not answer /{Command} autocomplete.", FcScanCommand);
+        }
+    }
+
+    private async Task<string> RunFcScanAsync(SocketSlashCommand command, CancellationToken ct)
+    {
+        var world = command.Data.Options.FirstOrDefault(o => o.Name == WorldOption)?.Value?.ToString()?.Trim() ?? string.Empty;
+
+        var target = ScannableBranches()
+            .FirstOrDefault(b => string.Equals(b.World.Trim(), world, StringComparison.OrdinalIgnoreCase));
+
+        if (target is null)
+            return "No Free Company with roster tracking is set up for that world on this server.";
+
+        var outcome = await RosterScanner.ScanAsync(guild, target, command.User.Mention, log, ct);
+        return outcome.Message;
     }
 
     // --- /relaystatus -------------------------------------------------------------------------

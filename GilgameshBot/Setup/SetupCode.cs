@@ -15,10 +15,25 @@ public sealed class SetupBranch
     [JsonPropertyName("channel")] public string Channel { get; set; } = string.Empty;
     [JsonPropertyName("state")] public string State { get; set; } = string.Empty;
 
+    // Roster tracking. Optional: absent on codes from older plugins and on branches without it.
+    [JsonPropertyName("lodestone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Lodestone { get; set; }
+
+    [JsonPropertyName("starterRank")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StarterRank { get; set; }
+
+    [JsonPropertyName("roster")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Roster { get; set; }
+
     // Parsed IDs, filled in by TryDecode once validated.
     [JsonIgnore] public ulong GuildId { get; set; }
     [JsonIgnore] public ulong ChannelId { get; set; }
     [JsonIgnore] public ulong StateChannelId { get; set; }
+    [JsonIgnore] public ulong LodestoneId { get; set; }
+    [JsonIgnore] public ulong RosterChannelId { get; set; }
 }
 
 /// <summary>
@@ -111,6 +126,9 @@ public static class SetupCode
                     Guild = b.GuildId.ToString(),
                     Channel = b.ChannelId.ToString(),
                     State = b.StateChannelId.ToString(),
+                    Lodestone = b.LodestoneId != 0 ? b.LodestoneId.ToString() : null,
+                    StarterRank = b.StarterRank.Trim() is { Length: > 0 } rank ? rank : null,
+                    Roster = b.RosterChannelId != 0 ? b.RosterChannelId.ToString() : null,
                 })
                 .ToList(),
             Receipt = receipt,
@@ -214,6 +232,15 @@ public static class SetupCode
             branch.GuildId = guildId;
             branch.ChannelId = channelId;
             branch.StateChannelId = stateChannelId;
+
+            // Roster fields are a convenience like the receipt pointer: a malformed one is
+            // dropped, never a failed import.
+            branch.LodestoneId = ulong.TryParse(branch.Lodestone, out var lodestoneId) ? lodestoneId : 0;
+            branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId)
+                                     && rosterId != channelId && rosterId != stateChannelId
+                ? rosterId
+                : 0;
+            branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
         }
 
         // The receipt pointer is a convenience, never a requirement: a malformed one is dropped
@@ -260,6 +287,9 @@ public static class SetupCode
                 GuildId = b.GuildId,
                 ChannelId = b.ChannelId,
                 StateChannelId = b.StateChannelId,
+                LodestoneId = b.LodestoneId,
+                StarterRank = b.StarterRank ?? "Member",
+                RosterChannelId = b.RosterChannelId,
             })
             .ToList();
         config.HeartbeatSeconds = payload.Heartbeat;

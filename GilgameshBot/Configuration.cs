@@ -48,6 +48,31 @@ public sealed class FcBranch
     /// </summary>
     public ulong StateChannelId { get; set; }
 
+    /// <summary>
+    /// The Free Company's Lodestone ID (the number in its Lodestone URL; the game uses the same
+    /// ID). 0 when this branch has no roster tracking.
+    /// </summary>
+    public ulong LodestoneId { get; set; }
+
+    /// <summary>
+    /// Name of the rank new members join in, e.g. "Spawn". The game calls it "Member" until the
+    /// Free Company renames it. The roster report lists who is in it and for how long.
+    /// </summary>
+    public string StarterRank { get; set; } = "Member";
+
+    /// <summary>
+    /// Channel that holds the roster state message and receives the scan reports. May be shared
+    /// by every branch on the server.
+    /// </summary>
+    public ulong RosterChannelId { get; set; }
+
+    /// <summary>True when this branch can be scanned: it has a server, a Lodestone ID, a starter rank and a roster channel.</summary>
+    public bool IsRosterConfigured =>
+        GuildId != 0
+        && LodestoneId != 0
+        && RosterChannelId != 0
+        && !string.IsNullOrWhiteSpace(StarterRank);
+
     /// <summary>True when every field needed to connect this branch is filled in.</summary>
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(Name)
