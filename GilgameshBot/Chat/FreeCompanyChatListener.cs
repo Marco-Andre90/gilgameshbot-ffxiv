@@ -108,8 +108,8 @@ public sealed class FreeCompanyChatListener : IDisposable
     /// </summary>
     private static string StripGameGlyphs(string text)
     {
-        var kept = text.Where(c => c is < '' or > '').ToArray();
-        return string.Join(' ', new string(kept).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var spaced = text.Select(c => c is >= '\uE000' and <= '\uF8FF' ? ' ' : c).ToArray();
+        return string.Join(' ', new string(spaced).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
     /// <summary>
