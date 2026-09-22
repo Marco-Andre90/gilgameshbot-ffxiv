@@ -60,6 +60,12 @@ public static class RosterScanner
             if (guild.GetTextChannel(branch.RosterChannelId) is not { } channel)
                 return new RosterOutcome(false, "The roster channel was not found, or the bot cannot see it.");
 
+            // Without Read Message History Discord answers an empty list instead of an error: the
+            // scan would miss its state message and start over every time.
+            var perms = guild.CurrentUser.GetPermissions(channel);
+            if (!perms.ViewChannel || !perms.SendMessages || !perms.AttachFiles || !perms.ReadMessageHistory)
+                return new RosterOutcome(false, PermissionHint);
+
             var options = new RequestOptions { CancelToken = ct };
             var stored = await LoadStateAsync(channel, guild.CurrentUser.Id, options, ct);
 

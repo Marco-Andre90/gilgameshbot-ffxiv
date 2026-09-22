@@ -567,8 +567,10 @@ public sealed class DiscordBridge : IDisposable
         if (s.Client.GetGuild(branch.GuildId) is not { } guild)
             return new RosterOutcome(false, $"The bot is not a member of the Discord server of {branch.Name}.");
 
+        // Read before the first await: a teardown in between disposes the token source.
+        var ct = s.Cts.Token;
         var who = MessageFormatter.EscapeMarkdown(await CharacterLabelAsync());
-        return await RosterScanner.ScanAsync(guild, branch, who, log, s.Cts.Token);
+        return await RosterScanner.ScanAsync(guild, branch, who, log, ct);
     }
 
     // --- Setup code delivery --------------------------------------------------------------
