@@ -7,7 +7,7 @@ One bot serves any number of Free Company branches (one per home world + Free Co
 ## What it does
 
 - While your character is logged in, the plugin connects to Discord as **GilgameshBot** and posts every Free Company chat line to the configured channel as `**Character Name**: message`.
-- It also relays the game's Free Company notices, worded as your game client shows them: members logging in and out (`🔔 Name has logged in.`) and FC announcements such as a member joining, leaving or being removed (`📣 …`). Turn this off with *Relay logins, logouts and Free Company announcements*.
+- It also relays the game's FC announcements, worded as your game client shows them, such as a member joining, leaving or being removed (`📣 …`); turn this off with *Relay Free Company announcements*. Members logging in and out (`🔔 Name has logged in.`) can be relayed too, but that is off by default: turn it on with *Relay member logins and logouts*.
 - **The Free Company branch is picked from the character you log in as.** The plugin reads your home world and Free Company name and looks them up in a branch table; each branch has its own Discord server and relay channel, and the branches on a server share one hidden state channel. A member with characters in two branches needs no extra setup — log in as the Kraken character and Kraken's channel gets the chat, log in as the Famfrit one and Famfrit's does.
 - `@name` typed in game becomes a real Discord mention (username, display name or role). `@everyone` and `@here` are never relayed as mentions.
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** (naming who stopped) when the last member stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
@@ -125,7 +125,8 @@ Two things to know:
 | Connect automatically when a character logs in | on | Disconnects again on logout |
 | Relay Free Company chat | on | Master switch; the bot can stay connected without relaying |
 | Include my own messages | on | Turn off if you only want *other* members' lines relayed |
-| Relay logins, logouts and Free Company announcements | on | The game's FC login/logout notices and FC announcements (joined, left, removed, rank changes…), in the game client's language. Never pings anyone |
+| Relay Free Company announcements | on | The game's FC announcements (joined, left, removed, rank changes…), in the game client's language. Never pings anyone |
+| Relay member logins and logouts | off | The game's FC login/logout notices, in the game client's language. Never pings anyone |
 | Turn `@name` into Discord mentions | on | Exact match on a mentionable role name, then username, then display name |
 | Post Online / Offline announcements | on | |
 | Delay between messages (ms) | 300 | Spreads out a busy chat; Discord.Net still handles rate-limit retries |

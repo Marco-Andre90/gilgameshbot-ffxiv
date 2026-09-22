@@ -176,10 +176,14 @@ public sealed class Configuration : IPluginConfiguration
     public bool RelayOwnMessages { get; set; } = true;
 
     /// <summary>
-    /// Also relay the game's Free Company notices: members logging in and out, and FC
-    /// announcements (joined, left, removed, rank changes…).
+    /// Also relay the game's FC announcements (joined, left, removed, rank changes…).
     /// </summary>
     public bool RelayFreeCompanyNotices { get; set; } = true;
+
+    /// <summary>
+    /// Also relay the game's FC notices of members logging in and out. Off by default: noisy.
+    /// </summary>
+    public bool RelayLoginLogout { get; set; }
 
     /// <summary>Turn "@name" in game chat into a real Discord mention.</summary>
     public bool ResolveMentions { get; set; } = true;
