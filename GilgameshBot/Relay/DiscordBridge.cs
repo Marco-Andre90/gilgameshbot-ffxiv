@@ -516,6 +516,15 @@ public sealed class DiscordBridge : IDisposable
 
     private async Task SendAsync(Session s, OutboundMessage message, CancellationToken ct)
     {
+        if (message.Kind != OutboundKind.Chat)
+        {
+            await s.TextChannel!.SendMessageAsync(
+                MessageFormatter.ComposeNotice(message.Kind, message.Text),
+                allowedMentions: AllowedMentions.None,
+                options: new RequestOptions { CancelToken = ct });
+            return;
+        }
+
         var resolved = await s.Mentions!.ResolveAsync(message.Text, config.ResolveMentions, ct);
         var content = MessageFormatter.Compose(message.SenderName, resolved.Text);
 

@@ -24,7 +24,7 @@ Users do not build: they add the custom plugin repository `https://github.com/Ma
 GilgameshBot/
   Plugin.cs                     entry point, login/logout wiring, /gilgamesh command
   Configuration.cs              persisted settings (token, branch table, toggles) + FcBranch
-  Chat/FreeCompanyChatListener  IChatGui.ChatMessage → filter FreeCompany → enqueue
+  Chat/FreeCompanyChatListener  IChatGui.ChatMessage → filter FreeCompany (+ login/logout, announcements) → enqueue
   Chat/OutboundMessage          record passed from game thread to Discord worker
   Relay/DiscordBridge           gateway lifecycle, Online/Offline, outbound queue + worker
   Relay/GuildMemberSearch       exact-match member lookup (username / global name / nickname) shared by mentions and DM delivery

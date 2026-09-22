@@ -817,6 +817,13 @@ public sealed class ConfigWindow : Window, IDisposable
             config.Save();
         }
 
+        var relayNotices = config.RelayFreeCompanyNotices;
+        if (ImGui.Checkbox("Relay logins, logouts and Free Company announcements", ref relayNotices))
+        {
+            config.RelayFreeCompanyNotices = relayNotices;
+            config.Save();
+        }
+
         var resolveMentions = config.ResolveMentions;
         if (ImGui.Checkbox("Turn @name into Discord mentions", ref resolveMentions))
         {

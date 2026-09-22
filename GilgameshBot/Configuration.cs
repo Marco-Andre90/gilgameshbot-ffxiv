@@ -175,6 +175,12 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Also relay messages typed by the character running the plugin.</summary>
     public bool RelayOwnMessages { get; set; } = true;
 
+    /// <summary>
+    /// Also relay the game's Free Company notices: members logging in and out, and FC
+    /// announcements (joined, left, removed, rank changes…).
+    /// </summary>
+    public bool RelayFreeCompanyNotices { get; set; } = true;
+
     /// <summary>Turn "@name" in game chat into a real Discord mention.</summary>
     public bool ResolveMentions { get; set; } = true;
 
