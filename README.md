@@ -76,7 +76,7 @@ Members with characters in more than one branch need nothing extra: one setup co
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → name it `GilgameshBot`.
 2. **Bot** tab → **Reset Token** → copy the token. You will paste it into the plugin. No privileged intents are needed — the bot reads only its own presence messages, over REST.
-3. **OAuth2 → URL Generator**: scopes `bot` **and** `applications.commands`; permissions **View Channels** and **Send Messages** only. Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
+3. **OAuth2 → URL Generator**: scopes `bot` **and** `applications.commands`; permissions **View Channels**, **Send Messages** and **Read Message History**, plus **Attach Files** (and optionally **Pin Messages**) if you use the [FC roster](#fc-roster). Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
 
    *Already invited the bot before the slash commands existed?* Open the generated URL again with both scopes ticked and authorise it for the same server. It adds the `applications.commands` scope; no new permissions are requested.
 4. In Discord, enable **Settings → Advanced → Developer Mode**, then right-click the server → **Copy Server ID**, and right-click the target channel → **Copy Channel ID**.
