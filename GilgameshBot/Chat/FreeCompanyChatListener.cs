@@ -48,11 +48,22 @@ public sealed class FreeCompanyChatListener : IDisposable
     {
         try
         {
-            if (message.LogKind != XivChatType.FreeCompany)
+            var kind = message.LogKind switch
+            {
+                XivChatType.FreeCompany => OutboundKind.Chat,
+                XivChatType.FreeCompanyLoginLogout => OutboundKind.LoginLogout,
+                XivChatType.FreeCompanyAnnouncement => OutboundKind.Announcement,
+                _ => (OutboundKind?)null,
+            };
+
+            if (kind is null || !config.RelayEnabled)
                 return;
 
-            if (!config.RelayEnabled)
+            if (kind != OutboundKind.Chat)
+            {
+                RelayNotice(message.Message, kind.Value);
                 return;
+            }
 
             var senderName = ExtractSenderName(message.Sender);
             var text = message.Message.TextValue?.Trim();
@@ -73,6 +84,32 @@ public sealed class FreeCompanyChatListener : IDisposable
             // Never let an exception escape into the game's chat pipeline.
             log.Error(ex, "Failed to process a Free Company chat message.");
         }
+    }
+
+    /// <summary>
+    /// Login/logout notices and FC announcements are relayed as the game words them, in the
+    /// client's language, so nothing here depends on the text.
+    /// </summary>
+    private void RelayNotice(SeString message, OutboundKind kind)
+    {
+        if (!config.RelayFreeCompanyNotices)
+            return;
+
+        var text = StripGameGlyphs(message.TextValue);
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        bridge.Enqueue(new OutboundMessage(string.Empty, text, DateTimeOffset.Now, kind));
+    }
+
+    /// <summary>
+    /// Drops the game's private-use icon glyphs (they render as boxes on Discord) and collapses
+    /// the whitespace they leave behind.
+    /// </summary>
+    private static string StripGameGlyphs(string text)
+    {
+        var spaced = text.Select(c => c is >= '\uE000' and <= '\uF8FF' ? ' ' : c).ToArray();
+        return string.Join(' ', new string(spaced).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
     /// <summary>

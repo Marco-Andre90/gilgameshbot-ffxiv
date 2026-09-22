@@ -1,4 +1,5 @@
 using System.Text;
+using GilgameshBot.Chat;
 
 namespace GilgameshBot.Relay;
 
@@ -14,9 +15,21 @@ public static class MessageFormatter
     /// Produces <c>**Sender**: body</c>, where <paramref name="body"/> is already escaped and
     /// has its mentions inserted. Truncates to Discord's limit on a safe boundary.
     /// </summary>
-    public static string Compose(string senderName, string body)
+    public static string Compose(string senderName, string body) =>
+        Truncate($"**{EscapeMarkdown(senderName)}**: {body}");
+
+    /// <summary>
+    /// Produces a game notice line, e.g. <c>🔔 Name has logged in.</c>. The raw game text is
+    /// escaped and mass mentions neutralised here; notices never resolve mentions.
+    /// </summary>
+    public static string ComposeNotice(OutboundKind kind, string text)
     {
-        var content = $"**{EscapeMarkdown(senderName)}**: {body}";
+        var icon = kind == OutboundKind.LoginLogout ? "🔔" : "📣";
+        return Truncate($"{icon} {NeutraliseMassMentions(EscapeMarkdown(text))}");
+    }
+
+    private static string Truncate(string content)
+    {
         if (content.Length <= MaxLength)
             return content;
 
