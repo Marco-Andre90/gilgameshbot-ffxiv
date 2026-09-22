@@ -92,7 +92,10 @@ public sealed class FreeCompanyChatListener : IDisposable
     /// </summary>
     private void RelayNotice(SeString message, OutboundKind kind)
     {
-        if (!config.RelayFreeCompanyNotices)
+        var enabled = kind == OutboundKind.LoginLogout
+            ? config.RelayLoginLogout
+            : config.RelayFreeCompanyNotices;
+        if (!enabled)
             return;
 
         var text = StripGameGlyphs(message.TextValue);

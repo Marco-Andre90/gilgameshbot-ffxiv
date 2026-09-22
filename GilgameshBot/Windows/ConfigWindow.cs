@@ -818,9 +818,16 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         var relayNotices = config.RelayFreeCompanyNotices;
-        if (ImGui.Checkbox("Relay logins, logouts and Free Company announcements", ref relayNotices))
+        if (ImGui.Checkbox("Relay Free Company announcements", ref relayNotices))
         {
             config.RelayFreeCompanyNotices = relayNotices;
+            config.Save();
+        }
+
+        var relayLoginLogout = config.RelayLoginLogout;
+        if (ImGui.Checkbox("Relay member logins and logouts", ref relayLoginLogout))
+        {
+            config.RelayLoginLogout = relayLoginLogout;
             config.Save();
         }
 
