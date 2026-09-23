@@ -43,6 +43,7 @@ public sealed record RosterDiff(
     bool IsFirstScan,
     List<RosterMember> Joined,
     List<RosterMember> Left,
+    List<(string OldName, string NewName)> Renamed,
     List<RosterMember> Starters);
 
 public static class RosterUpdater
@@ -72,6 +73,7 @@ public static class RosterUpdater
         };
 
         var joined = new List<RosterMember>();
+        var renamed = new List<(string OldName, string NewName)>();
 
         foreach (var m in members)
         {
@@ -99,6 +101,10 @@ public static class RosterUpdater
             if (old is null && !isFirst)
                 joined.Add(member);
 
+            // Same Lodestone ID, different name: a rename, not a leave + join.
+            if (old is not null && !string.Equals(old.Name, member.Name, StringComparison.Ordinal))
+                renamed.Add((old.Name, member.Name));
+
             state.Members[key] = member;
         }
 
@@ -112,7 +118,9 @@ public static class RosterUpdater
             .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return (state, new RosterDiff(isFirst, joined, left, starters));
+        renamed.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.NewName, b.NewName));
+
+        return (state, new RosterDiff(isFirst, joined, left, renamed, starters));
     }
 
     /// <summary>
@@ -142,6 +150,12 @@ public static class RosterUpdater
             lines.Add(string.Empty);
             lines.Add($"**Left ({diff.Left.Count})**");
             lines.AddRange(diff.Left.Count == 0 ? ["—"] : diff.Left.Select(m => $"• {Escape(m.Name)}"));
+
+            lines.Add(string.Empty);
+            lines.Add($"**Renamed ({diff.Renamed.Count})**");
+            lines.AddRange(diff.Renamed.Count == 0
+                ? ["—"]
+                : diff.Renamed.Select(r => $"• {Escape(r.OldName)} → {Escape(r.NewName)}"));
         }
 
         lines.Add(string.Empty);

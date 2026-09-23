@@ -127,7 +127,8 @@ public static class RosterScanner
 
             return new RosterOutcome(true, diff.IsFirstScan
                 ? $"First roster of {branch.Name} recorded: {state.Members.Count} members, {diff.Starters.Count} in {state.StarterRank}."
-                : $"Roster of {branch.Name} scanned: {diff.Joined.Count} joined, {diff.Left.Count} left, {diff.Starters.Count} in {state.StarterRank}.");
+                : $"Roster of {branch.Name} scanned: {diff.Joined.Count} joined, {diff.Left.Count} left, "
+                  + $"{diff.Renamed.Count} renamed, {diff.Starters.Count} in {state.StarterRank}.");
         }
         catch (OperationCanceledException)
         {
