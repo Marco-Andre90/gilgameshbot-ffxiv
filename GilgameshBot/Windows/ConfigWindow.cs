@@ -60,6 +60,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private int rosterBranch = -1;
     private string lodestoneIdBuffer = string.Empty;
     private string starterRankBuffer = string.Empty;
+    private int promotionDaysBuffer = 30;
     private string rosterChannelIdBuffer = string.Empty;
     private string? rosterMessage;
     private bool rosterMessageIsWarning;
@@ -912,6 +913,11 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiComponents.HelpMarker(
             "The rank new members join in, spelled as on the Lodestone. The game calls it \"Member\" until the Free Company renames it.");
 
+        ImGui.InputInt("Days before promotion", ref promotionDaysBuffer, 1, 7);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The report lists the members who have been in the starter rank at least this many days. 1–365.");
+
         ImGui.InputText("Roster channel ID", ref rosterChannelIdBuffer, 32);
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
@@ -969,6 +975,7 @@ public sealed class ConfigWindow : Window, IDisposable
         var branch = config.Branches[index];
         lodestoneIdBuffer = branch.LodestoneId == 0 ? string.Empty : branch.LodestoneId.ToString();
         starterRankBuffer = branch.StarterRank;
+        promotionDaysBuffer = branch.PromotionDays;
         rosterChannelIdBuffer = branch.RosterChannelId == 0 ? string.Empty : branch.RosterChannelId.ToString();
     }
 
@@ -1005,7 +1012,14 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         branch.LodestoneId = lodestoneId;
+        if (promotionDaysBuffer is < 1 or > 365)
+        {
+            rosterMessage = "Days before promotion must be between 1 and 365.";
+            return;
+        }
+
         branch.StarterRank = starterRank;
+        branch.PromotionDays = promotionDaysBuffer;
         branch.RosterChannelId = rosterChannelId;
         config.Save();
 

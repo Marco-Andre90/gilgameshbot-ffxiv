@@ -28,6 +28,10 @@ public sealed class SetupBranch
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Roster { get; set; }
 
+    [JsonPropertyName("promotionDays")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PromotionDays { get; set; }
+
     // Parsed IDs, filled in by TryDecode once validated.
     [JsonIgnore] public ulong GuildId { get; set; }
     [JsonIgnore] public ulong ChannelId { get; set; }
@@ -129,6 +133,7 @@ public static class SetupCode
                     Lodestone = b.LodestoneId != 0 ? b.LodestoneId.ToString() : null,
                     StarterRank = b.StarterRank.Trim() is { Length: > 0 } rank ? rank : null,
                     Roster = b.RosterChannelId != 0 ? b.RosterChannelId.ToString() : null,
+                    PromotionDays = Math.Clamp(b.PromotionDays, 1, 365),
                 })
                 .ToList(),
             Receipt = receipt,
@@ -241,6 +246,7 @@ public static class SetupCode
                 ? rosterId
                 : 0;
             branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
+            branch.PromotionDays = branch.PromotionDays is >= 1 and <= 365 ? branch.PromotionDays : null;
         }
 
         // The receipt pointer is a convenience, never a requirement: a malformed one is dropped
@@ -289,6 +295,7 @@ public static class SetupCode
                 StateChannelId = b.StateChannelId,
                 LodestoneId = b.LodestoneId,
                 StarterRank = b.StarterRank ?? "Member",
+                PromotionDays = b.PromotionDays ?? 30,
                 RosterChannelId = b.RosterChannelId,
             })
             .ToList();

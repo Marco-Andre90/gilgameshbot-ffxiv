@@ -31,6 +31,7 @@ public sealed class RosterState
     [JsonPropertyName("world")] public string World { get; set; } = string.Empty;
     [JsonPropertyName("fcName")] public string FcName { get; set; } = string.Empty;
     [JsonPropertyName("starterRank")] public string StarterRank { get; set; } = string.Empty;
+    [JsonPropertyName("promotionDays")] public int PromotionDays { get; set; } = 30;
     [JsonPropertyName("firstScan")] public DateTime FirstScanUtc { get; set; }
     [JsonPropertyName("lastScan")] public DateTime LastScanUtc { get; set; }
     [JsonPropertyName("members")] public Dictionary<string, RosterMember> Members { get; set; } = [];
@@ -68,6 +69,7 @@ public static class RosterUpdater
             World = branch.World.Trim(),
             FcName = branch.FcName.Trim(),
             StarterRank = starterRank,
+            PromotionDays = Math.Clamp(branch.PromotionDays, 1, 365),
             FirstScanUtc = previous?.FirstScanUtc ?? nowUtc,
             LastScanUtc = nowUtc,
         };
@@ -161,7 +163,7 @@ public static class RosterUpdater
         var due = DueForPromotion(state, diff, nowUtc);
 
         lines.Add(string.Empty);
-        lines.Add($"**{Escape(state.StarterRank)} for {PromotionDays}+ days ({due.Count} of {diff.Starters.Count})**");
+        lines.Add($"**{Escape(state.StarterRank)} for {state.PromotionDays}+ days ({due.Count} of {diff.Starters.Count})**");
         lines.AddRange(due.Count == 0
             ? ["—"]
             : due.Select(m => m.StarterSinceUtc is { } since
@@ -172,16 +174,13 @@ public static class RosterUpdater
         return Chunk(lines);
     }
 
-    /// <summary>How long a member stays in the starter rank before the report lists them.</summary>
-    public const int PromotionDays = 30;
-
     /// <summary>
-    /// Starter-rank members in it for <see cref="PromotionDays"/> or more, longest first. Members
+    /// Starter-rank members in it for the branch's promotion days or more, longest first. Members
     /// already in the rank on the first scan count from that scan.
     /// </summary>
     public static List<RosterMember> DueForPromotion(RosterState state, RosterDiff diff, DateTime nowUtc) =>
         diff.Starters
-            .Where(m => (nowUtc - (m.StarterSinceUtc ?? state.FirstScanUtc)).TotalDays >= PromotionDays)
+            .Where(m => (nowUtc - (m.StarterSinceUtc ?? state.FirstScanUtc)).TotalDays >= state.PromotionDays)
             .ToList();
 
     /// <summary>

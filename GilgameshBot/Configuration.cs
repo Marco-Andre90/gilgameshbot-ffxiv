@@ -60,6 +60,9 @@ public sealed class FcBranch
     /// </summary>
     public string StarterRank { get; set; } = "Member";
 
+    /// <summary>Days in the starter rank after which the roster report lists a member as due for promotion.</summary>
+    public int PromotionDays { get; set; } = 30;
+
     /// <summary>
     /// Channel that holds the roster state message and receives the scan reports. May be shared
     /// by every branch on the server.
