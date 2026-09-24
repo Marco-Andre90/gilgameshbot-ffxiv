@@ -112,13 +112,13 @@ public static class RosterScanner
                 if (created is not null)
                     return created;
 
-                await PostReportAsync(channel, report, options);
+                await PublishAsync(channel, guild.CurrentUser.Id, state, diff, report, now, options);
             }
             else
             {
                 // Report first: if saving fails afterwards, the next scan repeats this report
                 // instead of silently losing it.
-                await PostReportAsync(channel, report, options);
+                await PublishAsync(channel, guild.CurrentUser.Id, state, diff, report, now, options);
                 await SaveStateAsync(stored.Message, stored.Files, options);
             }
 
@@ -283,9 +283,107 @@ public static class RosterScanner
         return string.Join('\n', lines);
     }
 
-    private static async Task PostReportAsync(SocketTextChannel channel, List<string> report, RequestOptions options)
+    // --- Report -------------------------------------------------------------------------------
+
+    /// <summary>How far back the channel is searched for this Free Company's report and notice.</summary>
+    private const int HistoryDepth = 300;
+
+    /// <summary>
+    /// Keeps one report per Free Company: the newest one is edited in place (or reposted when
+    /// its length in messages changed), older copies are deleted, and a short notice pointing at
+    /// it replaces the previous notice so the channel still shows that a scan happened.
+    /// </summary>
+    private static async Task PublishAsync(
+        SocketTextChannel channel, ulong botId, RosterState state, RosterDiff diff,
+        List<string> report, DateTime nowUtc, RequestOptions options)
     {
-        foreach (var part in report)
-            await channel.SendMessageAsync(part, allowedMentions: AllowedMentions.None, options: options);
+        var reportTitle = RosterUpdater.ReportTitle(state);
+        var noticeTitle = RosterUpdater.NoticeTitle(state);
+
+        var history = (await channel.GetMessagesAsync(HistoryDepth, options).FlattenAsync())
+            .Where(m => m.Author.Id == botId)
+            .OrderBy(m => m.Id) // oldest first
+            .ToList();
+
+        // A report is its titled message plus the untitled parts the bot posted right after it.
+        var reports = new List<List<IMessage>>();
+        var notices = new List<IMessage>();
+        List<IMessage>? current = null;
+
+        foreach (var m in history)
+        {
+            if (m.Content.StartsWith("📋 **Roster — ", StringComparison.Ordinal))
+            {
+                current = [m];
+                if (m.Content.StartsWith(reportTitle, StringComparison.Ordinal))
+                    reports.Add(current);
+            }
+            else if (m.Content.StartsWith("🔄 **Roster updated — ", StringComparison.Ordinal)
+                     || m.Content.StartsWith(StateMarker, StringComparison.Ordinal))
+            {
+                current = null;
+                if (m.Content.StartsWith(noticeTitle, StringComparison.Ordinal))
+                    notices.Add(m);
+            }
+            else
+            {
+                current?.Add(m);
+            }
+        }
+
+        var newest = reports.LastOrDefault();
+        foreach (var old in reports.Where(r => !ReferenceEquals(r, newest)))
+            await DeleteAllAsync(old, options);
+
+        IUserMessage first;
+        if (newest is not null && newest.Count == report.Count && newest.All(m => m is IUserMessage))
+        {
+            for (var i = 0; i < report.Count; i++)
+            {
+                var text = report[i];
+                await ((IUserMessage)newest[i]).ModifyAsync(p =>
+                {
+                    p.Content = text;
+                    p.AllowedMentions = AllowedMentions.None;
+                }, options);
+            }
+
+            first = (IUserMessage)newest[0];
+        }
+        else
+        {
+            // A different number of parts: repost, so no part ends up below another Free
+            // Company's report.
+            if (newest is not null)
+                await DeleteAllAsync(newest, options);
+
+            first = null!;
+            foreach (var part in report)
+            {
+                var sent = await channel.SendMessageAsync(part, allowedMentions: AllowedMentions.None, options: options);
+                first ??= sent;
+            }
+        }
+
+        await DeleteAllAsync(notices, options);
+        await channel.SendMessageAsync(
+            RosterUpdater.ComposeNotice(state, diff, first.GetJumpUrl(), nowUtc),
+            allowedMentions: AllowedMentions.None,
+            options: options);
+    }
+
+    private static async Task DeleteAllAsync(IEnumerable<IMessage> messages, RequestOptions options)
+    {
+        foreach (var m in messages)
+        {
+            try
+            {
+                await m.DeleteAsync(options);
+            }
+            catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Already gone.
+            }
+        }
     }
 }

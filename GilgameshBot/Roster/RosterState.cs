@@ -131,7 +131,7 @@ public static class RosterUpdater
     {
         var lines = new List<string>
         {
-            $"📋 **Roster — {Escape(state.FcName)} @ {Escape(state.World)}** · {state.Members.Count} members · scanned by {requestedBy}",
+            $"{ReportTitle(state)} · {state.Members.Count} members · scanned <t:{Unix(nowUtc)}:f> by {requestedBy}",
         };
 
         var before = $"before <t:{Unix(state.FirstScanUtc)}:d>";
@@ -168,6 +168,25 @@ public static class RosterUpdater
 
         return Chunk(lines);
     }
+
+    /// <summary>
+    /// First words of a Free Company's report. Also how the scanner finds that report again to
+    /// edit it, so it must stay stable between scans.
+    /// </summary>
+    public static string ReportTitle(RosterState state) =>
+        $"📋 **Roster — {Escape(state.FcName)} @ {Escape(state.World)}**";
+
+    /// <summary>First words of the "report updated" notice posted under the reports; stable like <see cref="ReportTitle"/>.</summary>
+    public static string NoticeTitle(RosterState state) =>
+        $"🔄 **Roster updated — {Escape(state.FcName)} @ {Escape(state.World)}**";
+
+    /// <summary>The short line posted after each scan, pointing at the (edited) report.</summary>
+    public static string ComposeNotice(RosterState state, RosterDiff diff, string reportUrl, DateTime nowUtc) =>
+        $"{NoticeTitle(state)} · scan of <t:{Unix(nowUtc)}:f> · "
+        + (diff.IsFirstScan
+            ? $"first scan, {state.Members.Count} members recorded"
+            : $"{diff.Joined.Count} joined, {diff.Left.Count} left, {diff.Renamed.Count} renamed")
+        + $" · [see the report]({reportUrl})";
 
     private static string Days(TimeSpan span)
     {
