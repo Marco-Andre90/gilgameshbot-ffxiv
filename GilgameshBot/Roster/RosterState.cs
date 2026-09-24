@@ -139,7 +139,7 @@ public static class RosterUpdater
         if (diff.IsFirstScan)
         {
             lines.Add($"First scan: every current member is recorded. Joins and leaves are reported from the next scan on; "
-                      + $"time in {Escape(state.StarterRank)} counts from today for anyone promoted to it or joining later.");
+                      + $"time in {Escape(state.StarterRank)} counts from today, for everyone already in it too.");
         }
         else
         {
@@ -158,16 +158,31 @@ public static class RosterUpdater
                 : diff.Renamed.Select(r => $"• {Escape(r.OldName)} → {Escape(r.NewName)}"));
         }
 
+        var due = DueForPromotion(state, diff, nowUtc);
+
         lines.Add(string.Empty);
-        lines.Add($"**{Escape(state.StarterRank)} ({diff.Starters.Count})**");
-        lines.AddRange(diff.Starters.Count == 0
+        lines.Add($"**{Escape(state.StarterRank)} for {PromotionDays}+ days ({due.Count} of {diff.Starters.Count})**");
+        lines.AddRange(due.Count == 0
             ? ["—"]
-            : diff.Starters.Select(m => m.StarterSinceUtc is { } since
+            : due.Select(m => m.StarterSinceUtc is { } since
                 ? $"• {Escape(m.Name)} — {Days(nowUtc - since)} (since <t:{Unix(since)}:d>)"
-                : $"• {Escape(m.Name)} — {before}"));
+                // Already in the rank on the first scan: counted from that scan, so "at least".
+                : $"• {Escape(m.Name)} — {Days(nowUtc - state.FirstScanUtc)}+ ({before})"));
 
         return Chunk(lines);
     }
+
+    /// <summary>How long a member stays in the starter rank before the report lists them.</summary>
+    public const int PromotionDays = 30;
+
+    /// <summary>
+    /// Starter-rank members in it for <see cref="PromotionDays"/> or more, longest first. Members
+    /// already in the rank on the first scan count from that scan.
+    /// </summary>
+    public static List<RosterMember> DueForPromotion(RosterState state, RosterDiff diff, DateTime nowUtc) =>
+        diff.Starters
+            .Where(m => (nowUtc - (m.StarterSinceUtc ?? state.FirstScanUtc)).TotalDays >= PromotionDays)
+            .ToList();
 
     /// <summary>
     /// First words of a Free Company's report. Also how the scanner finds that report again to

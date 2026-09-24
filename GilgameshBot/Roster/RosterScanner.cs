@@ -125,10 +125,11 @@ public static class RosterScanner
             log.Information("Roster scan of {Branch}: {Count} members, {Joined} joined, {Left} left, {Starters} in the starter rank.",
                 branch.Describe(), state.Members.Count, diff.Joined.Count, diff.Left.Count, diff.Starters.Count);
 
+            var due = RosterUpdater.DueForPromotion(state, diff, now).Count;
             return new RosterOutcome(true, diff.IsFirstScan
                 ? $"First roster of {branch.Name} recorded: {state.Members.Count} members, {diff.Starters.Count} in {state.StarterRank}."
                 : $"Roster of {branch.Name} scanned: {diff.Joined.Count} joined, {diff.Left.Count} left, "
-                  + $"{diff.Renamed.Count} renamed, {diff.Starters.Count} in {state.StarterRank}.");
+                  + $"{diff.Renamed.Count} renamed, {due} of {diff.Starters.Count} in {state.StarterRank} for {RosterUpdater.PromotionDays}+ days.");
         }
         catch (OperationCanceledException)
         {
