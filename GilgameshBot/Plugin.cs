@@ -57,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
         MigrateConfiguration(Configuration);
 
         Bridge = new DiscordBridge(Configuration, Log, GetCharacterLabelOnFrameworkThread);
+        Bridge.SharedConfigApplied += OnSharedConfigApplied;
         ChatListener = new FreeCompanyChatListener(ChatGui, PlayerState, Configuration, Bridge, Log);
 
         configWindow = new ConfigWindow(this);
@@ -103,6 +104,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
 
         ChatListener.Dispose();
+        Bridge.SharedConfigApplied -= OnSharedConfigApplied;
         Bridge.Dispose(); // announces "Offline" and closes the gateway connection
     }
 
@@ -428,6 +430,24 @@ public sealed class Plugin : IDalamudPlugin
         lastGoodKey = null;
         CancelBranchResolution();
         Bridge.Disconnect();
+    }
+
+    /// <summary>
+    /// A newer shared configuration arrived from Discord and was applied. Says so in game chat,
+    /// and reconnects when the branch this session relays was removed or moved.
+    /// </summary>
+    private void OnSharedConfigApplied(int revision, bool reconnect)
+    {
+        Framework.RunOnFrameworkThread(() => ChatGui.Print(
+            $"GilgameshBot: settings updated from Discord (revision {revision})." + (reconnect ? " Reconnecting…" : string.Empty),
+            "GilgameshBot"));
+
+        if (!reconnect)
+            return;
+
+        // The resolve loop waits for the teardown to finish before connecting the new branch.
+        Bridge.Disconnect();
+        BeginBranchResolution();
     }
 
     private void OnCommand(string command, string args)

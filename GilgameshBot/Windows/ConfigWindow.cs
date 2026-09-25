@@ -55,6 +55,14 @@ public sealed class ConfigWindow : Window, IDisposable
     private string dmTargetBuffer = string.Empty;
     private Task<SetupCodeOutcome>? setupCodeAction;
 
+    // Shared configuration: the publish job, its outcome, and the revision the edit buffers were
+    // last filled from — a sync from Discord replaces the branch list under the window.
+    private const string PublishPopup = "Publish configuration?##publishSharedConfig";
+    private Task<SharedConfigOutcome>? publishAction;
+    private string? sharedMessage;
+    private bool sharedMessageIsWarning;
+    private int seenSharedRevision;
+
     // FC roster tab: which branch the editor shows (-1: none), its edit buffers, and the two
     // background jobs (reading the FC ID off the character, running a scan) polled per frame.
     private int rosterBranch = -1;
@@ -74,6 +82,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         tokenBuffer = string.Empty;
         RefreshBuffersFromConfig();
+        seenSharedRevision = config.SharedRevision;
 
         // Dalamud multiplies Size and SizeConstraints by the global scale itself,
         // so these are deliberately unscaled numbers.
@@ -121,6 +130,15 @@ public sealed class ConfigWindow : Window, IDisposable
         ConsumeCharacterProbe();
         ConsumeSetupCodeAction();
         ConsumeRosterJobs();
+        ConsumePublishAction();
+
+        // A newer shared configuration was applied (or published, or imported): the edit buffers
+        // point into a branch list that has been replaced.
+        if (config.SharedRevision != seenSharedRevision)
+        {
+            seenSharedRevision = config.SharedRevision;
+            RefreshBuffersFromConfig();
+        }
 
         // Consumed exactly once, whether or not the tab ends up being drawn this frame.
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
@@ -191,6 +209,8 @@ public sealed class ConfigWindow : Window, IDisposable
         DrawConnection();
         SectionGap();
         DrawSetupCode();
+        SectionGap();
+        DrawSharedConfig();
         SectionGap();
         DrawBehaviourSettings();
     }
@@ -400,7 +420,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         config.Branches.RemoveAt(removeIndex);
         config.Save();
-        validationMessage = "Branch removed. Reconnect to apply.";
+        validationMessage = "Branch removed. Reconnect to apply, and publish it (Status tab) to share it.";
 
         // Keep the editor pointing at the row the officer thinks it points at.
         if (selectedBranch == removeIndex)
@@ -574,7 +594,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         config.Save();
-        validationMessage = "Saved. Reconnect to apply.";
+        validationMessage = "Saved. Reconnect to apply, and publish it (Status tab) to share it.";
     }
 
     private void SelectBranch(int index)
@@ -806,6 +826,95 @@ public sealed class ConfigWindow : Window, IDisposable
         }
     }
 
+    // --- Shared configuration ---------------------------------------------------------------
+
+    /// <summary>
+    /// Which shared configuration this plugin follows, and the button that makes this plugin's
+    /// branches the one everybody follows. Publishing asks for confirmation first.
+    /// </summary>
+    private void DrawSharedConfig()
+    {
+        SectionHeader("Shared configuration");
+
+        if (config.SharedRevision > 0)
+        {
+            var by = config.SharedPublishedBy.Length > 0 ? $", published by {config.SharedPublishedBy}" : string.Empty;
+            var at = config.SharedPublishedAtUtc is { } when ? $" on {when.ToLocalTime():g}" : string.Empty;
+            TextWrappedColoured(Grey, $"Following revision {config.SharedRevision}{by}{at}.");
+        }
+        else
+        {
+            TextWrappedColoured(Grey, "No shared configuration yet. Once one is published, your plugin follows it.");
+        }
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        var canPublish = publishAction is null && config.IsDiscordConfigured && plugin.Bridge.CanPublishSharedConfig;
+        using (ImRaii.Disabled(!canPublish))
+        {
+            if (ImGui.Button(publishAction is null ? "Publish to Discord" : "Publishing…", ImGuiHelpers.ScaledVector2(180, 0)))
+                ImGui.OpenPopup(PublishPopup);
+        }
+
+        // Outside the disabled scope, so the explanation still works while the button is greyed out.
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Makes your Free Company branches (roster settings included) and timers the configuration every member's "
+            + "plugin follows. It is kept in each branch's state channel; the bot token is not part of it.\n\n"
+            + "Plugins check on connect and every 5 minutes and take over a newer revision, replacing their own "
+            + "branch table. Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
+
+        DrawPublishConfirmation();
+
+        if (sharedMessage is { } msg)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextWrappedColoured(sharedMessageIsWarning ? Yellow : Green, msg);
+        }
+    }
+
+    private void DrawPublishConfirmation()
+    {
+        var open = true;
+        using var popup = ImRaii.PopupModal(PublishPopup, ref open, ImGuiWindowFlags.AlwaysAutoResize);
+        if (!popup)
+            return;
+
+        ImGui.TextUnformatted("Publish your configuration to Discord?");
+        ImGuiHelpers.ScaledDummy(4);
+        ImGui.TextUnformatted($"Every member's plugin replaces its branch table with yours ({config.Branches.Count} branches).");
+        ImGui.TextUnformatted("The bot token is not published.");
+        ImGuiHelpers.ScaledDummy(8);
+
+        if (ImGui.Button("Publish", ImGuiHelpers.ScaledVector2(120, 0)))
+        {
+            publishAction = plugin.Bridge.PublishSharedConfigAsync();
+            sharedMessage = null;
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Cancel", ImGuiHelpers.ScaledVector2(120, 0)))
+            ImGui.CloseCurrentPopup();
+    }
+
+    /// <summary>Picks up a finished publish. Called once per frame.</summary>
+    private void ConsumePublishAction()
+    {
+        if (publishAction is not { IsCompleted: true } action)
+            return;
+
+        publishAction = null;
+
+        var outcome = action.IsCompletedSuccessfully
+            ? action.Result
+            : new SharedConfigOutcome(false, "Could not publish the configuration; see /xllog for details.");
+
+        sharedMessage = outcome.Message;
+        sharedMessageIsWarning = !outcome.Ok;
+    }
+
     /// <summary>Re-reads the edit buffers from the config, after an import.</summary>
     private void RefreshBuffersFromConfig()
     {
@@ -1025,7 +1134,7 @@ public sealed class ConfigWindow : Window, IDisposable
         config.Save();
 
         rosterMessage = branch.IsRosterConfigured
-            ? "Saved. Export a new setup code to share it."
+            ? "Saved. Publish it (Status tab) to share it."
             : "Saved. Roster tracking stays off until the Lodestone ID and roster channel are filled in.";
         rosterMessageIsWarning = !branch.IsRosterConfigured;
     }

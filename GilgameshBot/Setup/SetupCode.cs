@@ -70,6 +70,14 @@ public sealed class SetupPayload
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
 
     /// <summary>
+    /// Revision of the shared configuration the branches came from. Optional: absent on codes
+    /// from older plugins and from plugins that never saw a published configuration.
+    /// </summary>
+    [JsonPropertyName("rev")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Revision { get; set; }
+
+    /// <summary>
     /// Set only on codes delivered by DM. Never required: an older plugin simply ignores it, and
     /// a code without one behaves exactly as before.
     /// </summary>
@@ -111,36 +119,51 @@ public static class SetupCode
     /// </param>
     public static string Encode(Configuration config, SetupReceipt? receipt = null)
     {
-        var heartbeat = Math.Clamp(config.HeartbeatSeconds, 10, 120);
+        var (heartbeat, stale) = ClampTimers(config.HeartbeatSeconds, config.StaleSeconds);
 
         var payload = new SetupPayload
         {
             Version = CurrentVersion,
             Token = config.BotToken,
             Heartbeat = heartbeat,
-            Stale = Math.Clamp(config.StaleSeconds, heartbeat * 2, 600),
-            Branches = config.Branches
-                .Where(b => b.IsComplete)
-                .Select(b => new SetupBranch
-                {
-                    Name = b.Name.Trim(),
-                    World = b.World.Trim(),
-                    FcName = b.FcName.Trim(),
-                    Tag = b.FcTag.Trim(),
-                    Guild = b.GuildId.ToString(),
-                    Channel = b.ChannelId.ToString(),
-                    State = b.StateChannelId.ToString(),
-                    Lodestone = b.LodestoneId != 0 ? b.LodestoneId.ToString() : null,
-                    StarterRank = b.StarterRank.Trim() is { Length: > 0 } rank ? rank : null,
-                    Roster = b.RosterChannelId != 0 ? b.RosterChannelId.ToString() : null,
-                    PromotionDays = Math.Clamp(b.PromotionDays, 1, 365),
-                })
-                .ToList(),
+            Stale = stale,
+            Branches = ToSetupBranches(config.Branches),
+            Revision = config.SharedRevision > 0 ? config.SharedRevision : null,
             Receipt = receipt,
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
         return Prefix + ToBase64Url(json);
+    }
+
+    /// <summary>The complete branches among <paramref name="branches"/>, as they travel in a setup code or the shared configuration.</summary>
+    internal static List<SetupBranch> ToSetupBranches(IEnumerable<FcBranch> branches) =>
+        branches
+            .Where(b => b.IsComplete)
+            .Select(b => new SetupBranch
+            {
+                Name = b.Name.Trim(),
+                World = b.World.Trim(),
+                FcName = b.FcName.Trim(),
+                Tag = b.FcTag.Trim(),
+                Guild = b.GuildId.ToString(),
+                Channel = b.ChannelId.ToString(),
+                State = b.StateChannelId.ToString(),
+                Lodestone = b.LodestoneId != 0 ? b.LodestoneId.ToString() : null,
+                StarterRank = b.StarterRank.Trim() is { Length: > 0 } rank ? rank : null,
+                Roster = b.RosterChannelId != 0 ? b.RosterChannelId.ToString() : null,
+                PromotionDays = Math.Clamp(b.PromotionDays, 1, 365),
+            })
+            .ToList();
+
+    /// <summary>
+    /// Same clamps as the settings window, applied in the same order: the heartbeat first,
+    /// because the lower bound of the stale window is twice the <em>clamped</em> heartbeat.
+    /// </summary>
+    internal static (int Heartbeat, int Stale) ClampTimers(int heartbeat, int stale)
+    {
+        var h = Math.Clamp(heartbeat, 10, 120);
+        return (h, Math.Clamp(stale, h * 2, 600));
     }
 
     /// <summary>
@@ -197,60 +220,8 @@ public static class SetupCode
             return false;
         }
 
-        if (parsed.Branches is not { Count: > 0 })
-        {
-            error = "The setup code has no Free Company branches in it.";
+        if (!TryValidateBranches(parsed.Branches, "setup code", out error))
             return false;
-        }
-
-        foreach (var branch in parsed.Branches)
-        {
-            // Every message here is fixed text: branch names, worlds, Free Company names and
-            // tags come from the pasted input and must never be echoed back.
-            if (string.IsNullOrWhiteSpace(branch.Name)
-                || string.IsNullOrWhiteSpace(branch.World)
-                || string.IsNullOrWhiteSpace(branch.FcName))
-            {
-                error = "One of the Free Company branches in the setup code is incomplete.";
-                return false;
-            }
-
-            if (!ulong.TryParse(branch.Guild, out var guildId) || guildId == 0
-                || !ulong.TryParse(branch.Channel, out var channelId) || channelId == 0
-                || !ulong.TryParse(branch.State, out var stateChannelId) || stateChannelId == 0)
-            {
-                error = "One of the Free Company branches in the setup code has no valid Discord IDs.";
-                return false;
-            }
-
-            if (stateChannelId == channelId)
-            {
-                error = "One of the Free Company branches in the setup code uses its relay channel as the state channel; "
-                        + "they must be different channels. Ask the officer who set the bot up for a new code.";
-                return false;
-            }
-
-            branch.Name = branch.Name.Trim();
-            branch.World = branch.World.Trim();
-            branch.FcName = branch.FcName.Trim();
-            branch.Tag = branch.Tag.Trim();
-            branch.GuildId = guildId;
-            branch.ChannelId = channelId;
-            branch.StateChannelId = stateChannelId;
-
-            // Roster fields are a convenience like the receipt pointer: a malformed one is
-            // dropped, never a failed import.
-            branch.LodestoneId = ulong.TryParse(branch.Lodestone, out var lodestoneId) ? lodestoneId : 0;
-            branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId) ? rosterId : 0;
-            branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
-            branch.PromotionDays = branch.PromotionDays is >= 1 and <= 365 ? branch.PromotionDays : null;
-        }
-
-        // A roster channel shared with any branch's relay or state channel would let the roster
-        // scan edit or delete relay and presence messages: drop it, like any other bad roster field.
-        var busyChannels = parsed.Branches.SelectMany(b => new[] { b.ChannelId, b.StateChannelId }).ToHashSet();
-        foreach (var branch in parsed.Branches.Where(b => busyChannels.Contains(b.RosterChannelId)))
-            branch.RosterChannelId = 0;
 
         // The receipt pointer is a convenience, never a requirement: a malformed one is dropped
         // rather than failing the import, and an older code simply has none.
@@ -269,13 +240,79 @@ public static class SetupCode
         }
 
         parsed.Token = parsed.Token.Trim();
+        (parsed.Heartbeat, parsed.Stale) = ClampTimers(parsed.Heartbeat, parsed.Stale);
 
-        // Same clamps as the settings window, applied in the same order: the heartbeat first,
-        // because the lower bound of the stale window is twice the *clamped* heartbeat.
-        parsed.Heartbeat = Math.Clamp(parsed.Heartbeat, 10, 120);
-        parsed.Stale = Math.Clamp(parsed.Stale, parsed.Heartbeat * 2, 600);
+        if (parsed.Revision is <= 0)
+            parsed.Revision = null;
 
         payload = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// Checks and normalises a branch list from a setup code or the shared configuration, and
+    /// fills in the parsed IDs. <paramref name="source"/> names it in the error ("setup code");
+    /// every error is fixed text, never any part of the input.
+    /// </summary>
+    internal static bool TryValidateBranches(List<SetupBranch>? branches, string source, out string error)
+    {
+        error = string.Empty;
+
+        if (branches is not { Count: > 0 })
+        {
+            error = $"The {source} has no Free Company branches in it.";
+            return false;
+        }
+
+        foreach (var branch in branches)
+        {
+            // Every message here is fixed text: branch names, worlds, Free Company names and
+            // tags come from the input and must never be echoed back.
+            if (string.IsNullOrWhiteSpace(branch.Name)
+                || string.IsNullOrWhiteSpace(branch.World)
+                || string.IsNullOrWhiteSpace(branch.FcName))
+            {
+                error = $"One of the Free Company branches in the {source} is incomplete.";
+                return false;
+            }
+
+            if (!ulong.TryParse(branch.Guild, out var guildId) || guildId == 0
+                || !ulong.TryParse(branch.Channel, out var channelId) || channelId == 0
+                || !ulong.TryParse(branch.State, out var stateChannelId) || stateChannelId == 0)
+            {
+                error = $"One of the Free Company branches in the {source} has no valid Discord IDs.";
+                return false;
+            }
+
+            if (stateChannelId == channelId)
+            {
+                error = $"One of the Free Company branches in the {source} uses its relay channel as the state channel; "
+                        + "they must be different channels. Ask the officer who set the bot up to fix it.";
+                return false;
+            }
+
+            branch.Name = branch.Name.Trim();
+            branch.World = branch.World.Trim();
+            branch.FcName = branch.FcName.Trim();
+            branch.Tag = (branch.Tag ?? string.Empty).Trim();
+            branch.GuildId = guildId;
+            branch.ChannelId = channelId;
+            branch.StateChannelId = stateChannelId;
+
+            // Roster fields are a convenience like the receipt pointer: a malformed one is
+            // dropped, never a failed import.
+            branch.LodestoneId = ulong.TryParse(branch.Lodestone, out var lodestoneId) ? lodestoneId : 0;
+            branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId) ? rosterId : 0;
+            branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
+            branch.PromotionDays = branch.PromotionDays is >= 1 and <= 365 ? branch.PromotionDays : null;
+        }
+
+        // A roster channel shared with any branch's relay or state channel would let the roster
+        // scan edit or delete relay and presence messages: drop it, like any other bad roster field.
+        var busyChannels = branches.SelectMany(b => new[] { b.ChannelId, b.StateChannelId }).ToHashSet();
+        foreach (var branch in branches.Where(b => busyChannels.Contains(b.RosterChannelId)))
+            branch.RosterChannelId = 0;
+
         return true;
     }
 
@@ -286,7 +323,37 @@ public static class SetupCode
     public static void Apply(SetupPayload payload, Configuration config)
     {
         config.BotToken = payload.Token;
-        config.Branches = (payload.Branches ?? [])
+        ApplyBranches(payload.Branches, payload.Heartbeat, payload.Stale, config);
+
+        // The code's revision, or 0 when it carries none: the next sync then brings in whatever
+        // the state channels hold, so a code older than the shared configuration heals itself.
+        config.SharedRevision = payload.Revision ?? 0;
+        config.SharedPublishedBy = string.Empty;
+        config.SharedPublishedAtUtc = null;
+
+        // Only a code that came with a pointer sets one. A clipboard import leaves an earlier
+        // pending receipt alone, so a DM still gets scrubbed even if the officer pasted the code
+        // by hand in between.
+        if (payload.Receipt is { } receipt)
+        {
+            config.PendingReceipt = new ReceiptPointer
+            {
+                ChannelId = receipt.ChannelId,
+                MessageId = receipt.MessageId,
+            };
+        }
+
+        config.Save();
+    }
+
+    /// <summary>
+    /// Replaces the branch table and the presence timers with validated ones (see
+    /// <see cref="TryValidateBranches"/>). Does not save. The list is replaced, never mutated:
+    /// other threads read it.
+    /// </summary>
+    internal static void ApplyBranches(List<SetupBranch>? branches, int heartbeat, int stale, Configuration config)
+    {
+        config.Branches = (branches ?? [])
             .Select(b => new FcBranch
             {
                 Name = b.Name,
@@ -302,22 +369,8 @@ public static class SetupCode
                 RosterChannelId = b.RosterChannelId,
             })
             .ToList();
-        config.HeartbeatSeconds = payload.Heartbeat;
-        config.StaleSeconds = payload.Stale;
-
-        // Only a code that came with a pointer sets one. A clipboard import leaves an earlier
-        // pending receipt alone, so a DM still gets scrubbed even if the officer pasted the code
-        // by hand in between.
-        if (payload.Receipt is { } receipt)
-        {
-            config.PendingReceipt = new ReceiptPointer
-            {
-                ChannelId = receipt.ChannelId,
-                MessageId = receipt.MessageId,
-            };
-        }
-
-        config.Save();
+        config.HeartbeatSeconds = heartbeat;
+        config.StaleSeconds = stale;
     }
 
     private static string ToBase64Url(byte[] bytes) =>

@@ -192,6 +192,21 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public ReceiptPointer? PendingReceipt { get; set; }
 
+    // --- Shared configuration ---
+
+    /// <summary>
+    /// Revision of the shared configuration (branches + timers) this plugin holds. Set by
+    /// publishing, by a sync from the state channel and by an imported setup code; 0 when unknown.
+    /// A newer revision in any state channel replaces the branches and timers here.
+    /// </summary>
+    public int SharedRevision { get; set; }
+
+    /// <summary>Who published <see cref="SharedRevision"/>, for the settings window. Empty when unknown.</summary>
+    public string SharedPublishedBy { get; set; } = string.Empty;
+
+    /// <summary>When <see cref="SharedRevision"/> was published. Null when unknown.</summary>
+    public DateTime? SharedPublishedAtUtc { get; set; }
+
     // --- Behaviour ---
 
     /// <summary>Connect to Discord automatically when a character logs in.</summary>
