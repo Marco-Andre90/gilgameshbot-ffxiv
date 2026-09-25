@@ -279,13 +279,15 @@ public sealed class SlashCommands
             || interaction.Data.CommandName != FcScanCommand)
             return;
 
+        // Shown as "FC name @ World", sent back as the Lodestone ID: two Free Companies on one
+        // world stay two distinct choices.
         var typed = interaction.Data.Current.Value?.ToString()?.Trim() ?? string.Empty;
         var results = ScannableBranches()
-            .Select(b => b.World.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(w => w.Contains(typed, StringComparison.OrdinalIgnoreCase))
+            .Select(b => (Label: $"{b.FcName.Trim()} @ {b.World.Trim()}", Id: b.LodestoneId.ToString()))
+            .Where(c => c.Label.Contains(typed, StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(c => c.Id)
             .Take(25)
-            .Select(w => new AutocompleteResult(w, w));
+            .Select(c => new AutocompleteResult(c.Label.Length > 100 ? c.Label[..100] : c.Label, c.Id));
 
         try
         {
@@ -303,15 +305,21 @@ public sealed class SlashCommands
 
     private async Task<string> RunFcScanAsync(SocketSlashCommand command, CancellationToken ct)
     {
-        var world = command.Data.Options.FirstOrDefault(o => o.Name == WorldOption)?.Value?.ToString()?.Trim() ?? string.Empty;
+        var value = command.Data.Options.FirstOrDefault(o => o.Name == WorldOption)?.Value?.ToString()?.Trim() ?? string.Empty;
+        var scannable = ScannableBranches();
 
-        var target = ScannableBranches()
-            .FirstOrDefault(b => string.Equals(b.World.Trim(), world, StringComparison.OrdinalIgnoreCase));
+        // A pick from the list is a Lodestone ID; typed text without picking is taken as a world.
+        var matches = ulong.TryParse(value, out var lodestoneId)
+            ? scannable.Where(b => b.LodestoneId == lodestoneId).ToList()
+            : scannable.Where(b => string.Equals(b.World.Trim(), value, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (target is null)
+        if (matches.Count == 0)
             return "No Free Company with roster tracking is set up for that world on this server.";
 
-        var outcome = await RosterScanner.ScanAsync(guild, target, command.User.Mention, log, ct);
+        if (matches.Select(b => b.LodestoneId).Distinct().Count() > 1)
+            return "More than one Free Company on this server is on that world. Pick one from the list.";
+
+        var outcome = await RosterScanner.ScanAsync(guild, matches[0], config, command.User.Mention, log, ct);
         return outcome.Message;
     }
 

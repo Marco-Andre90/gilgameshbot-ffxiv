@@ -241,13 +241,16 @@ public static class SetupCode
             // Roster fields are a convenience like the receipt pointer: a malformed one is
             // dropped, never a failed import.
             branch.LodestoneId = ulong.TryParse(branch.Lodestone, out var lodestoneId) ? lodestoneId : 0;
-            branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId)
-                                     && rosterId != channelId && rosterId != stateChannelId
-                ? rosterId
-                : 0;
+            branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId) ? rosterId : 0;
             branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
             branch.PromotionDays = branch.PromotionDays is >= 1 and <= 365 ? branch.PromotionDays : null;
         }
+
+        // A roster channel shared with any branch's relay or state channel would let the roster
+        // scan edit or delete relay and presence messages: drop it, like any other bad roster field.
+        var busyChannels = parsed.Branches.SelectMany(b => new[] { b.ChannelId, b.StateChannelId }).ToHashSet();
+        foreach (var branch in parsed.Branches.Where(b => busyChannels.Contains(b.RosterChannelId)))
+            branch.RosterChannelId = 0;
 
         // The receipt pointer is a convenience, never a requirement: a malformed one is dropped
         // rather than failing the import, and an older code simply has none.

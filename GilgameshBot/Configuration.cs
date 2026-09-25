@@ -238,6 +238,13 @@ public sealed class Configuration : IPluginConfiguration
     public bool IsDiscordConfigured =>
         !string.IsNullOrWhiteSpace(BotToken) && Branches.Any(b => b.IsComplete);
 
+    /// <summary>
+    /// True when <paramref name="channelId"/> is some branch's relay or state channel. A roster
+    /// channel must never be one: the roster scan edits and deletes the bot's messages there.
+    /// </summary>
+    public bool IsRelayOrStateChannel(ulong channelId) =>
+        Branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
+
     /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
     public FcBranch? FindBranch(string world, string fcTag, string fcName)
     {

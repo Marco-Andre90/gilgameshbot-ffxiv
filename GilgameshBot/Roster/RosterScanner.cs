@@ -44,13 +44,15 @@ public static class RosterScanner
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public static async Task<RosterOutcome> ScanAsync(
-        SocketGuild guild, FcBranch branch, string requestedBy, IPluginLog log, CancellationToken ct)
+        SocketGuild guild, FcBranch branch, Configuration config, string requestedBy, IPluginLog log, CancellationToken ct)
     {
         if (!branch.IsRosterConfigured)
             return new RosterOutcome(false, $"Roster tracking is not set up for {branch.Name}.");
 
-        if (branch.RosterChannelId == branch.ChannelId || branch.RosterChannelId == branch.StateChannelId)
-            return new RosterOutcome(false, "The roster channel must be different from the relay and state channels.");
+        // The scan edits and deletes the bot's own messages in the roster channel; in a relay or
+        // state channel those would be relayed chat and presence messages.
+        if (config.IsRelayOrStateChannel(branch.RosterChannelId))
+            return new RosterOutcome(false, "The roster channel must not be any branch's relay or state channel.");
 
         if (!await Gate.WaitAsync(0, ct))
             return new RosterOutcome(false, "A roster scan is already running. Try again when it finishes.");

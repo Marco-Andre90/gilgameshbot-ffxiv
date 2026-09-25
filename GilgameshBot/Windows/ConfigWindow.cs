@@ -998,9 +998,9 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        if (rosterChannelId != 0 && (rosterChannelId == branch.ChannelId || rosterChannelId == branch.StateChannelId))
+        if (rosterChannelId != 0 && config.IsRelayOrStateChannel(rosterChannelId))
         {
-            rosterMessage = "The roster channel must be different from the relay and state channels.";
+            rosterMessage = "The roster channel must not be any branch's relay or state channel.";
             return;
         }
 
@@ -1011,13 +1011,14 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        branch.LodestoneId = lodestoneId;
         if (promotionDaysBuffer is < 1 or > 365)
         {
             rosterMessage = "Days before promotion must be between 1 and 365.";
             return;
         }
 
+        // Everything validated: only now touch the live branch.
+        branch.LodestoneId = lodestoneId;
         branch.StarterRank = starterRank;
         branch.PromotionDays = promotionDaysBuffer;
         branch.RosterChannelId = rosterChannelId;
