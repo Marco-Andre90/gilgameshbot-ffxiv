@@ -4,6 +4,7 @@ using Discord;
 using Discord.Net;
 using Discord.WebSocket;
 using GilgameshBot.Chat;
+using GilgameshBot.Roster;
 using GilgameshBot.Setup;
 
 namespace GilgameshBot.Relay;
@@ -139,6 +140,7 @@ public sealed class DiscordBridge : IDisposable
         s.Client.Connected += () => OnConnectedAsync(s);
         s.Client.Disconnected += ex => OnDisconnectedAsync(s, ex);
         s.Client.SlashCommandExecuted += command => OnSlashCommandAsync(s, command);
+        s.Client.AutocompleteExecuted += interaction => OnAutocompleteAsync(s, interaction);
 
         s.Worker = Task.Run(() => WorkerLoopAsync(s));
         s.ConnectTask = Task.Run(async () =>
@@ -440,6 +442,15 @@ public sealed class DiscordBridge : IDisposable
         return slash.HandleAsync(command, s.Cts.Token);
     }
 
+    /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered by the leader.</summary>
+    private Task OnAutocompleteAsync(Session s, SocketAutocompleteInteraction interaction)
+    {
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
+            return Task.CompletedTask;
+
+        return slash.HandleAutocompleteAsync(interaction, s.Cts.Token);
+    }
+
     private Task OnDisconnectedAsync(Session s, Exception exception)
     {
         if (!IsCurrent(s))
@@ -539,6 +550,27 @@ public sealed class DiscordBridge : IDisposable
             content,
             allowedMentions: resolved.ToAllowedMentions(), // only the IDs we resolved; never everyone/here
             options: new RequestOptions { CancelToken = ct });
+    }
+
+    // --- Roster ---------------------------------------------------------------------------
+
+    /// <summary>True when a roster scan can run: the bot is connected. Any branch may be scanned, leader or not.</summary>
+    public bool CanScanRoster => State == BridgeState.Connected && session?.Guild is not null;
+
+    /// <summary>Runs a roster scan of <paramref name="branch"/> from the settings window.</summary>
+    public async Task<RosterOutcome> ScanRosterAsync(FcBranch branch)
+    {
+        var s = session;
+        if (s is null || State != BridgeState.Connected)
+            return new RosterOutcome(false, "Connect first.");
+
+        if (s.Client.GetGuild(branch.GuildId) is not { } guild)
+            return new RosterOutcome(false, $"The bot is not a member of the Discord server of {branch.Name}.");
+
+        // Read before the first await: a teardown in between disposes the token source.
+        var ct = s.Cts.Token;
+        var who = MessageFormatter.EscapeMarkdown(await CharacterLabelAsync());
+        return await RosterScanner.ScanAsync(guild, branch, config, who, log, ct);
     }
 
     // --- Setup code delivery --------------------------------------------------------------

@@ -48,6 +48,34 @@ public sealed class FcBranch
     /// </summary>
     public ulong StateChannelId { get; set; }
 
+    /// <summary>
+    /// The Free Company's Lodestone ID (the number in its Lodestone URL; the game uses the same
+    /// ID). 0 when this branch has no roster tracking.
+    /// </summary>
+    public ulong LodestoneId { get; set; }
+
+    /// <summary>
+    /// Name of the rank new members join in, e.g. "Spawn". The game calls it "Member" until the
+    /// Free Company renames it. The roster report lists who is in it and for how long.
+    /// </summary>
+    public string StarterRank { get; set; } = "Member";
+
+    /// <summary>Days in the starter rank after which the roster report lists a member as due for promotion.</summary>
+    public int PromotionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Channel that holds the roster state message and receives the scan reports. May be shared
+    /// by every branch on the server.
+    /// </summary>
+    public ulong RosterChannelId { get; set; }
+
+    /// <summary>True when this branch can be scanned: it has a server, a Lodestone ID, a starter rank and a roster channel.</summary>
+    public bool IsRosterConfigured =>
+        GuildId != 0
+        && LodestoneId != 0
+        && RosterChannelId != 0
+        && !string.IsNullOrWhiteSpace(StarterRank);
+
     /// <summary>True when every field needed to connect this branch is filled in.</summary>
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(Name)
@@ -209,6 +237,13 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool IsDiscordConfigured =>
         !string.IsNullOrWhiteSpace(BotToken) && Branches.Any(b => b.IsComplete);
+
+    /// <summary>
+    /// True when <paramref name="channelId"/> is some branch's relay or state channel. A roster
+    /// channel must never be one: the roster scan edits and deletes the bot's messages there.
+    /// </summary>
+    public bool IsRelayOrStateChannel(ulong channelId) =>
+        Branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
 
     /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
     public FcBranch? FindBranch(string world, string fcTag, string fcName)

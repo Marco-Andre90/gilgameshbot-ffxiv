@@ -6,6 +6,7 @@ using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using GilgameshBot.Relay;
+using GilgameshBot.Roster;
 using GilgameshBot.Setup;
 
 namespace GilgameshBot.Windows;
@@ -53,6 +54,18 @@ public sealed class ConfigWindow : Window, IDisposable
     // result lands in setupMessage on a later frame; Draw itself never blocks.
     private string dmTargetBuffer = string.Empty;
     private Task<SetupCodeOutcome>? setupCodeAction;
+
+    // FC roster tab: which branch the editor shows (-1: none), its edit buffers, and the two
+    // background jobs (reading the FC ID off the character, running a scan) polled per frame.
+    private int rosterBranch = -1;
+    private string lodestoneIdBuffer = string.Empty;
+    private string starterRankBuffer = string.Empty;
+    private int promotionDaysBuffer = 30;
+    private string rosterChannelIdBuffer = string.Empty;
+    private string? rosterMessage;
+    private bool rosterMessageIsWarning;
+    private Task<(bool Ok, string World, string Tag, string FcName, ulong FcId)>? fcIdProbe;
+    private Task<RosterOutcome>? rosterScan;
 
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
@@ -107,6 +120,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ConsumeCharacterProbe();
         ConsumeSetupCodeAction();
+        ConsumeRosterJobs();
 
         // Consumed exactly once, whether or not the tab ends up being drawn this frame.
         var statusFlags = selectStatusTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
@@ -130,6 +144,12 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (discordTab)
                 DrawDiscordSettings();
+        }
+
+        using (var rosterTab = ImRaii.TabItem("FC roster"))
+        {
+            if (rosterTab)
+                DrawRosterTab();
         }
 
         using (var advancedTab = ImRaii.TabItem("Advanced"))
@@ -300,8 +320,9 @@ public sealed class ConfigWindow : Window, IDisposable
         SectionHeader("Discord commands");
 
         TextWrappedColoured(Grey,
-            "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes) "
-            + "and see who is relaying with /relaystatus. Both only work while at least one member's plugin is connected.");
+            "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes), "
+            + "see who is relaying with /relaystatus and scan a Free Company's roster with /fcscan. "
+            + "They only work while at least one member's plugin is connected.");
         ImGuiHelpers.ScaledDummy(2);
         TextWrappedColoured(Grey,
             "Choose which roles may use them in Server Settings → Integrations → GilgameshBot → Command permissions.");
@@ -790,6 +811,268 @@ public sealed class ConfigWindow : Window, IDisposable
     {
         tokenBuffer = config.BotToken;
         ClearBranchEditor();
+        rosterBranch = -1;
+    }
+
+    // --- FC roster tab ----------------------------------------------------------------------
+
+    private void DrawRosterTab()
+    {
+        ImGuiHelpers.ScaledDummy(4);
+
+        TextWrappedColoured(Grey,
+            "Scans a Free Company's member list on the Lodestone and posts, in the roster channel, who joined, "
+            + "who left, and who is in the starter rank and for how long. Scans are manual: from here, or with "
+            + "/fcscan in Discord. The Lodestone updates a few hours after the game.");
+        ImGuiHelpers.ScaledDummy(6);
+
+        SectionHeader("Free Companies");
+
+        if (config.Branches.Count == 0)
+        {
+            TextColoured(Grey, "No branches yet. Add them on the Discord tab, or import a setup code.");
+            return;
+        }
+
+        // The branch list can shrink under us (removed on the Discord tab).
+        if (rosterBranch >= config.Branches.Count)
+            rosterBranch = -1;
+
+        using (var table = ImRaii.Table("##rosterBranches", 3,
+                   ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
+        {
+            if (table)
+            {
+                ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f);
+                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthStretch, 3f);
+                ImGui.TableSetupColumn("Roster", ImGuiTableColumnFlags.WidthStretch, 3f);
+                ImGui.TableHeadersRow();
+
+                for (var i = 0; i < config.Branches.Count; i++)
+                {
+                    var branch = config.Branches[i];
+                    ImGui.TableNextRow();
+
+                    ImGui.TableNextColumn();
+                    if (ImGui.Selectable($"{(branch.Name.Length > 0 ? branch.Name : "(unnamed)")}##roster{i}",
+                            rosterBranch == i, ImGuiSelectableFlags.SpanAllColumns))
+                        SelectRosterBranch(i);
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(branch.World);
+
+                    ImGui.TableNextColumn();
+                    TextColoured(branch.IsRosterConfigured ? Green : Grey,
+                        branch.IsRosterConfigured ? "set up" : "not set up");
+                }
+            }
+        }
+
+        if (rosterBranch < 0)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextColoured(Grey, "Select a Free Company to set up or scan its roster.");
+            DrawRosterMessage();
+            return;
+        }
+
+        SectionGap();
+        DrawRosterEditor(config.Branches[rosterBranch]);
+        SectionGap();
+        DrawRosterScan(config.Branches[rosterBranch]);
+        DrawRosterMessage();
+    }
+
+    private void DrawRosterEditor(FcBranch branch)
+    {
+        SectionHeader($"Roster settings — {branch.Name}");
+
+        ImGui.InputText("Lodestone ID", ref lodestoneIdBuffer, 32);
+        ImGui.SameLine();
+
+        var canProbe = fcIdProbe is null
+                       && Plugin.PlayerState.IsLoaded
+                       && Plugin.ObjectTable.LocalPlayer is not null;
+        using (ImRaii.Disabled(!canProbe))
+        {
+            if (ImGui.Button("Use my FC"))
+                fcIdProbe = Plugin.Framework.RunOnFrameworkThread(() =>
+                {
+                    var ok = Plugin.TryReadFreeCompanyId(out var world, out var tag, out var fcName, out var fcId);
+                    return (ok, world, tag, fcName, fcId);
+                });
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The number in the Free Company's Lodestone address (…/lodestone/freecompany/<ID>/). "
+            + "\"Use my FC\" reads it from the character you are logged in as, when that character is in this Free Company.");
+
+        ImGui.InputText("Starter rank", ref starterRankBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The rank new members join in, spelled as on the Lodestone. The game calls it \"Member\" until the Free Company renames it.");
+
+        ImGui.InputInt("Days before promotion", ref promotionDaysBuffer, 1, 7);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The report lists the members who have been in the starter rank at least this many days. 1–365.");
+
+        ImGui.InputText("Roster channel ID", ref rosterChannelIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Where the bot keeps the saved member lists and posts the scan reports. One channel can serve every "
+            + "Free Company on the server. Use a new, empty channel: the bot's state message then stays on top. "
+            + "In a channel that already has messages the bot pins it instead, which needs Pin Messages.");
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (ImGui.Button("Save roster settings", ImGuiHelpers.ScaledVector2(180, 0)))
+            SaveRosterSettings(branch);
+    }
+
+    private void DrawRosterScan(FcBranch branch)
+    {
+        SectionHeader("Scan");
+
+        var bridge = plugin.Bridge;
+        var canScan = rosterScan is null && branch.IsRosterConfigured && bridge.CanScanRoster;
+
+        using (ImRaii.Disabled(!canScan))
+        {
+            if (ImGui.Button(rosterScan is null ? "Scan now" : "Scanning…", ImGuiHelpers.ScaledVector2(140, 0)))
+            {
+                rosterScan = bridge.ScanRosterAsync(branch);
+                rosterMessage = null;
+            }
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Reads the member list from the Lodestone (about one second per 50 members), compares it with the last scan "
+            + "and posts the report in the roster channel. Needs the plugin connected.");
+
+        if (!branch.IsRosterConfigured)
+            TextColoured(Grey, "Save a Lodestone ID, a starter rank and a roster channel first.");
+        else if (!bridge.CanScanRoster)
+            TextColoured(Grey, "Connect first.");
+    }
+
+    private void DrawRosterMessage()
+    {
+        if (rosterMessage is not { } msg)
+            return;
+
+        ImGuiHelpers.ScaledDummy(4);
+        TextWrappedColoured(rosterMessageIsWarning ? Yellow : Green, msg);
+    }
+
+    private void SelectRosterBranch(int index)
+    {
+        rosterBranch = index;
+        rosterMessage = null;
+
+        var branch = config.Branches[index];
+        lodestoneIdBuffer = branch.LodestoneId == 0 ? string.Empty : branch.LodestoneId.ToString();
+        starterRankBuffer = branch.StarterRank;
+        promotionDaysBuffer = branch.PromotionDays;
+        rosterChannelIdBuffer = branch.RosterChannelId == 0 ? string.Empty : branch.RosterChannelId.ToString();
+    }
+
+    private void SaveRosterSettings(FcBranch branch)
+    {
+        rosterMessageIsWarning = true;
+
+        // Empty fields turn roster tracking off for this branch.
+        ulong lodestoneId = 0;
+        if (lodestoneIdBuffer.Trim().Length > 0 && !ulong.TryParse(lodestoneIdBuffer.Trim(), out lodestoneId))
+        {
+            rosterMessage = "Lodestone ID must be a number.";
+            return;
+        }
+
+        ulong rosterChannelId = 0;
+        if (rosterChannelIdBuffer.Trim().Length > 0 && !ulong.TryParse(rosterChannelIdBuffer.Trim(), out rosterChannelId))
+        {
+            rosterMessage = "Roster channel ID must be a number.";
+            return;
+        }
+
+        if (rosterChannelId != 0 && config.IsRelayOrStateChannel(rosterChannelId))
+        {
+            rosterMessage = "The roster channel must not be any branch's relay or state channel.";
+            return;
+        }
+
+        var starterRank = starterRankBuffer.Trim();
+        if (starterRank.Length == 0)
+        {
+            rosterMessage = "Starter rank is required.";
+            return;
+        }
+
+        if (promotionDaysBuffer is < 1 or > 365)
+        {
+            rosterMessage = "Days before promotion must be between 1 and 365.";
+            return;
+        }
+
+        // Everything validated: only now touch the live branch.
+        branch.LodestoneId = lodestoneId;
+        branch.StarterRank = starterRank;
+        branch.PromotionDays = promotionDaysBuffer;
+        branch.RosterChannelId = rosterChannelId;
+        config.Save();
+
+        rosterMessage = branch.IsRosterConfigured
+            ? "Saved. Export a new setup code to share it."
+            : "Saved. Roster tracking stays off until the Lodestone ID and roster channel are filled in.";
+        rosterMessageIsWarning = !branch.IsRosterConfigured;
+    }
+
+    /// <summary>Picks up a finished "Use my FC" read or scan. Called once per frame.</summary>
+    private void ConsumeRosterJobs()
+    {
+        if (fcIdProbe is { IsCompleted: true } probe)
+        {
+            fcIdProbe = null;
+            rosterMessageIsWarning = true;
+
+            if (!probe.IsCompletedSuccessfully || !probe.Result.Ok)
+            {
+                rosterMessage = "Log in on a character that is in a Free Company first.";
+            }
+            else if (rosterBranch < 0 || rosterBranch >= config.Branches.Count)
+            {
+                rosterMessage = null;
+            }
+            else
+            {
+                var (_, world, tag, fcName, fcId) = probe.Result;
+                if (config.Branches[rosterBranch].Matches(world, tag, fcName))
+                {
+                    lodestoneIdBuffer = fcId.ToString();
+                    rosterMessage = "Lodestone ID filled in. Save to keep it.";
+                    rosterMessageIsWarning = false;
+                }
+                else
+                {
+                    rosterMessage = "Your character is not in this Free Company. Log in on one that is, or copy the ID from the Lodestone.";
+                }
+            }
+        }
+
+        if (rosterScan is { IsCompleted: true } scan)
+        {
+            rosterScan = null;
+
+            var outcome = scan.IsCompletedSuccessfully
+                ? scan.Result
+                : new RosterOutcome(false, "The roster scan failed; see /xllog for details.");
+
+            rosterMessage = outcome.Message;
+            rosterMessageIsWarning = !outcome.Ok;
+        }
     }
 
     private void DrawBehaviourSettings()
