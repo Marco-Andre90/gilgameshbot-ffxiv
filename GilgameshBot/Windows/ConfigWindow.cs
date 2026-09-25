@@ -418,7 +418,8 @@ public sealed class ConfigWindow : Window, IDisposable
         if (removeIndex < 0)
             return;
 
-        config.Branches.RemoveAt(removeIndex);
+        // Replaced, never mutated: the shared configuration sync reads the list off-thread.
+        config.Branches = config.Branches.Where((_, i) => i != removeIndex).ToList();
         config.Save();
         validationMessage = "Branch removed. Reconnect to apply, and publish it (Status tab) to share it.";
 
@@ -589,7 +590,8 @@ public sealed class ConfigWindow : Window, IDisposable
 
         if (isNew)
         {
-            config.Branches.Add(branch);
+            // Replaced, never mutated: the shared configuration sync reads the list off-thread.
+            config.Branches = [.. config.Branches, branch];
             selectedBranch = config.Branches.Count - 1;
         }
 
@@ -882,8 +884,18 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.TextUnformatted("Publish your configuration to Discord?");
         ImGuiHelpers.ScaledDummy(4);
-        ImGui.TextUnformatted($"Every member's plugin replaces its branch table with yours ({config.Branches.Count} branches).");
-        ImGui.TextUnformatted("The bot token is not published.");
+        ImGui.TextUnformatted("Every member's plugin replaces its branch table with yours:");
+
+        // Named, so a missing branch stands out: its members' plugins would find no branch after
+        // the sync, disconnect, and could then only be fixed with a new setup code.
+        using (ImRaii.PushIndent(1))
+        {
+            foreach (var b in config.Branches)
+                TextColoured(b.IsComplete ? Grey : Yellow, $"• {b.Describe()}{(b.IsComplete ? string.Empty : " — incomplete")}");
+        }
+
+        ImGuiHelpers.ScaledDummy(4);
+        ImGui.TextUnformatted("A branch left out here stops working for its members. The bot token is not published.");
         ImGuiHelpers.ScaledDummy(8);
 
         if (ImGui.Button("Publish", ImGuiHelpers.ScaledVector2(120, 0)))
