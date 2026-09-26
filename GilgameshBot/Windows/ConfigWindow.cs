@@ -210,8 +210,6 @@ public sealed class ConfigWindow : Window, IDisposable
         SectionGap();
         DrawSetupCode();
         SectionGap();
-        DrawSharedConfig();
-        SectionGap();
         DrawBehaviourSettings();
     }
 
@@ -421,7 +419,7 @@ public sealed class ConfigWindow : Window, IDisposable
         // Replaced, never mutated: the shared configuration sync reads the list off-thread.
         config.Branches = config.Branches.Where((_, i) => i != removeIndex).ToList();
         config.Save();
-        validationMessage = "Branch removed. Reconnect to apply, and publish it (Status tab) to share it.";
+        validationMessage = "Branch removed. Reconnect to apply, and publish it (Advanced tab) to share it.";
 
         // Keep the editor pointing at the row the officer thinks it points at.
         if (selectedBranch == removeIndex)
@@ -596,7 +594,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         config.Save();
-        validationMessage = "Saved. Reconnect to apply, and publish it (Status tab) to share it.";
+        validationMessage = "Saved. Reconnect to apply, and publish it (Advanced tab) to share it.";
     }
 
     private void SelectBranch(int index)
@@ -863,8 +861,8 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiComponents.HelpMarker(
             "Makes your Free Company branches (roster settings included) and timers the configuration every member's "
             + "plugin follows. It is kept in each branch's state channel; the bot token is not part of it.\n\n"
-            + "Plugins check on connect and every 5 minutes and take over a newer revision, replacing their own "
-            + "branch table. Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
+            + "Plugins check when they connect and take over a newer revision, replacing their own branch table. "
+            + "Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
 
         DrawPublishConfirmation();
 
@@ -1146,7 +1144,7 @@ public sealed class ConfigWindow : Window, IDisposable
         config.Save();
 
         rosterMessage = branch.IsRosterConfigured
-            ? "Saved. Publish it (Status tab) to share it."
+            ? "Saved. Publish it (Advanced tab) to share it."
             : "Saved. Roster tracking stays off until the Lodestone ID and roster channel are filled in.";
         rosterMessageIsWarning = !branch.IsRosterConfigured;
     }
@@ -1255,8 +1253,11 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiHelpers.ScaledDummy(4);
         TextWrappedColoured(Grey,
             "Defaults are fine for almost everyone. Every officer should use the same heartbeat "
-            + "and stale values (the setup code carries them).");
+            + "and stale values (the setup code and the shared configuration carry them).");
         ImGuiHelpers.ScaledDummy(6);
+
+        DrawSharedConfig();
+        SectionGap();
 
         SectionHeader("Timers");
 

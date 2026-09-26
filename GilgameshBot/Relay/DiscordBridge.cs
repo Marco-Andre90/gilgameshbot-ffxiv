@@ -319,8 +319,8 @@ public sealed class DiscordBridge : IDisposable
                 _ = Task.Run(() => ApplyPendingReceiptAsync(s));
 
                 // Ready also means every branch's server is in the client's cache: look for a
-                // newer shared configuration now, then every few minutes.
-                s.Sync = Task.Run(() => SharedConfigSyncLoopAsync(s));
+                // newer shared configuration, once per session — it rarely changes.
+                s.Sync = Task.Run(() => SyncSharedConfigOnConnectAsync(s));
             }
 
             State = BridgeState.Connected;
@@ -615,27 +615,14 @@ public sealed class DiscordBridge : IDisposable
         }
     }
 
-    /// <summary>Looks for a newer shared configuration on connect, then every <see cref="SharedConfig.SyncInterval"/>.</summary>
-    private async Task SharedConfigSyncLoopAsync(Session s)
+    /// <summary>Looks for a newer shared configuration once, right after connecting.</summary>
+    private async Task SyncSharedConfigOnConnectAsync(Session s)
     {
         var ct = s.Cts.Token;
 
         try
         {
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await SyncSharedConfigAsync(s, ct);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // One failed round must not end the sync for the session.
-                    log.Debug(ex, "Could not sync the shared configuration.");
-                }
-
-                await Task.Delay(SharedConfig.SyncInterval, ct);
-            }
+            await SyncSharedConfigAsync(s, ct);
         }
         catch (OperationCanceledException)
         {
@@ -643,7 +630,7 @@ public sealed class DiscordBridge : IDisposable
         }
         catch (Exception ex)
         {
-            log.Warning(ex, "The shared configuration sync stopped.");
+            log.Warning(ex, "Could not sync the shared configuration.");
         }
     }
 

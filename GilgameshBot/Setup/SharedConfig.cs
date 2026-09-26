@@ -52,9 +52,6 @@ public static class SharedConfig
     public const string Marker = "⚙️ **GilgameshBot shared configuration**";
     public const string FileName = "gilgamesh-config.json";
 
-    /// <summary>How often a connected plugin looks for a newer revision.</summary>
-    public static readonly TimeSpan SyncInterval = TimeSpan.FromMinutes(5);
-
     private const int FileVersion = 1;
 
     /// <summary>Same window as the presence queue.</summary>
@@ -263,7 +260,7 @@ public static class SharedConfig
                 var by = remoteNewest.PublishedBy.Length > 0 ? $" by {remoteNewest.PublishedBy}" : string.Empty;
                 return new SharedConfigOutcome(false,
                     $"Discord already has a newer configuration (revision {remoteNewest.Revision}{by}). "
-                    + "Your plugin takes it over within a few minutes; make your changes on top of it and publish again.");
+                    + "Reconnect to take it over, make your changes on top of it and publish again.");
             }
 
             var (heartbeat, stale) = SetupCode.ClampTimers(config.HeartbeatSeconds, config.StaleSeconds);
@@ -316,7 +313,7 @@ public static class SharedConfig
 
             return failed.Count == 0
                 ? new SharedConfigOutcome(true,
-                    $"Published revision {published.Revision}. Every connected plugin takes it over within {SyncInterval.TotalMinutes:0} minutes.")
+                    $"Published revision {published.Revision}. Every other plugin takes it over the next time it connects.")
                 : new SharedConfigOutcome(false,
                     $"Published revision {published.Revision}, but not on {string.Join(", ", failed.Distinct())}. See /xllog, then publish again.");
         }
