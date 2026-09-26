@@ -67,6 +67,13 @@ public sealed class DiscordBridge : IDisposable
 
     public int RelayedCount => Volatile.Read(ref relayedCount);
 
+    /// <summary>
+    /// Raised on a background thread after a newer shared configuration was applied, with its
+    /// revision. The flag is true when the active branch was removed or its Discord IDs changed,
+    /// so the plugin has to reconnect for it to take effect.
+    /// </summary>
+    public event Action<int, bool>? SharedConfigApplied;
+
     /// <summary>True when this instance is the one relaying.</summary>
     public bool IsLeader => session?.Coordinator?.IsLeader ?? false;
 
@@ -310,6 +317,10 @@ public sealed class DiscordBridge : IDisposable
                 // this officer handed out that nobody imported. Neither may delay the connection.
                 s.Expiry = Task.Run(() => SetupCodeExpiryLoopAsync(s));
                 _ = Task.Run(() => ApplyPendingReceiptAsync(s));
+
+                // Ready also means every branch's server is in the client's cache: look for a
+                // newer shared configuration, once per session — it rarely changes.
+                s.Sync = Task.Run(() => SyncSharedConfigOnConnectAsync(s));
             }
 
             State = BridgeState.Connected;
@@ -573,6 +584,109 @@ public sealed class DiscordBridge : IDisposable
         return await RosterScanner.ScanAsync(guild, branch, config, who, log, ct);
     }
 
+    // --- Shared configuration --------------------------------------------------------------
+
+    /// <summary>True when the configuration can be published: the bot is connected.</summary>
+    public bool CanPublishSharedConfig => State == BridgeState.Connected && session?.Guild is not null;
+
+    /// <summary>Publishes the local branches and timers to every branch's state channel.</summary>
+    public async Task<SharedConfigOutcome> PublishSharedConfigAsync()
+    {
+        var s = session;
+        if (s is null || State != BridgeState.Connected)
+            return new SharedConfigOutcome(false, "Connect first.");
+
+        // Read before the first await: a teardown in between disposes the token source.
+        var ct = s.Cts.Token;
+        var who = await CharacterLabelAsync();
+
+        try
+        {
+            return await SharedConfig.PublishAsync(s.Client, config, who, log, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return new SharedConfigOutcome(false, "Disconnected before the configuration was published.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Publishing the shared configuration failed.");
+            return new SharedConfigOutcome(false, "Could not publish the configuration; see /xllog for details.");
+        }
+    }
+
+    /// <summary>Looks for a newer shared configuration once, right after connecting.</summary>
+    private async Task SyncSharedConfigOnConnectAsync(Session s)
+    {
+        var ct = s.Cts.Token;
+
+        try
+        {
+            await SyncSharedConfigAsync(s, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // normal shutdown
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Could not sync the shared configuration.");
+        }
+    }
+
+    private async Task SyncSharedConfigAsync(Session s, CancellationToken ct)
+    {
+        var newest = await SharedConfig.FetchNewestAsync(s.Client, config, log, ct);
+        if (newest is null
+            || newest.Revision < config.SharedRevision
+            || (newest.Revision == config.SharedRevision && config.SharedPublishedAtUtc is not null))
+            return;
+
+        // Applied on the framework thread: the settings window enumerates the branch list there.
+        var reconnect = await Plugin.Framework.RunOnFrameworkThread(() =>
+        {
+            if (newest.Revision == config.SharedRevision)
+            {
+                // Same revision, typically from a setup code: only learn who published it.
+                if (config.SharedPublishedAtUtc is null)
+                {
+                    config.SharedPublishedBy = newest.PublishedBy;
+                    config.SharedPublishedAtUtc = newest.PublishedAtUtc;
+                    config.Save();
+                }
+
+                return (bool?)null;
+            }
+
+            SharedConfig.Apply(newest, config);
+
+            var active = s.Branch;
+            var now = config.Branches.FirstOrDefault(b =>
+                b.IsComplete && b.Matches(active.World, string.Empty, active.FcName));
+
+            return now is null
+                   || now.GuildId != active.GuildId
+                   || now.ChannelId != active.ChannelId
+                   || now.StateChannelId != active.StateChannelId
+                   || !string.Equals(now.FcTag.Trim(), active.FcTag.Trim(), StringComparison.OrdinalIgnoreCase);
+        });
+
+        if (reconnect is not { } mustReconnect || !IsCurrent(s))
+            return;
+
+        log.Information("Applied shared configuration revision {Revision}{Reconnect}.",
+            newest.Revision, mustReconnect ? "; reconnecting" : string.Empty);
+
+        try
+        {
+            SharedConfigApplied?.Invoke(newest.Revision, mustReconnect);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Shared configuration handler threw.");
+        }
+    }
+
     // --- Setup code delivery --------------------------------------------------------------
 
     /// <summary>
@@ -737,6 +851,11 @@ public sealed class DiscordBridge : IDisposable
             try { await expiry; } catch { /* it logs its own errors */ }
         }
 
+        if (s.Sync is { } sync)
+        {
+            try { await sync; } catch { /* it logs its own errors */ }
+        }
+
         // Hand off: drop our presence message so a peer can take the head of the queue, and find
         // out whether anyone is left. Own short-lived token - the session's is already cancelled.
         var peerAlive = false;
@@ -824,6 +943,9 @@ public sealed class DiscordBridge : IDisposable
 
         /// <summary>The setup code expiry sweep; awaited on teardown like the presence loop.</summary>
         public Task? Expiry { get; set; }
+
+        /// <summary>The shared configuration sync; awaited on teardown like the presence loop.</summary>
+        public Task? Sync { get; set; }
         public bool AnnouncedOnline { get; set; }
 
         /// <summary>Character label used in the Online notice, reused by the Offline one.</summary>

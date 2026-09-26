@@ -3,6 +3,7 @@ using Discord;
 using Discord.Net;
 using Discord.WebSocket;
 using Dalamud.Plugin.Services;
+using GilgameshBot.Setup;
 
 namespace GilgameshBot.Relay;
 
@@ -526,7 +527,8 @@ public sealed class PresenceCoordinator
             .Where(m => m.Content.AsSpan(Prefix.Length).StartsWith(branchTag, StringComparison.Ordinal))
             .ToList();
 
-        var foreign = messages.Count - all.Count;
+        // The shared configuration message belongs in the state channel too.
+        var foreign = messages.Count - all.Count - messages.Count(m => SharedConfig.IsSharedConfigMessage(m, self));
         if (foreign > 0)
             WarnNotDedicatedOnce($"{foreign} of the newest {messages.Count} messages are not presence messages");
 
