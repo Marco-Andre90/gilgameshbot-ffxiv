@@ -14,9 +14,10 @@ namespace GilgameshBot.Relay;
 /// <remarks>
 /// <para>
 /// The bot lives inside every officer's plugin, so every connected instance receives every
-/// interaction. Only the <em>leader</em> of the branch whose server the command came from answers;
-/// the rest return immediately. Two branches sharing one Discord server means two leaders may
-/// both try, so a "already acknowledged" error is swallowed rather than logged as a failure.
+/// interaction. Only the <em>leader</em> of the branch whose server the command came from answers,
+/// except for <c>/calendar</c>, which any connected plugin answers (the leader may be on a version
+/// without the calendar); the rest return immediately. Several may still try — two branches on one
+/// server, or <c>/calendar</c> — so an "already acknowledged" error is swallowed rather than logged.
 /// </para>
 /// <para>
 /// Nothing here ever blocks the gateway task: the handler acknowledges with
@@ -364,11 +365,11 @@ public sealed class SlashCommands
         }
         catch (HttpException ex) when (IsAlreadyAcknowledged(ex))
         {
-            // Two branches on one server: the other leader answered.
+            // Another plugin answered: two branches on one server, or /calendar.
         }
         catch (Exception ex)
         {
-            log.Debug(ex, "Could not answer /{Command} autocomplete.", FcScanCommand);
+            log.Debug(ex, "Could not answer /{Command} autocomplete.", interaction.Data.CommandName);
         }
     }
 

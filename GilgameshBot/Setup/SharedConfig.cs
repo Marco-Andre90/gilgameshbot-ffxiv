@@ -260,7 +260,7 @@ public static class SharedConfig
                 return new SharedConfigOutcome(false,
                     $"Branch {Label(incomplete)} is incomplete. Finish or remove it before publishing.");
 
-            if (Preflight(client, branches, config) is { } problem)
+            if ((Preflight(client, branches) ?? await CalendarPreflightAsync(client, config, ct)) is { } problem)
                 return new SharedConfigOutcome(false, $"{problem} Nothing was published.");
 
             var channels = StateChannels(client, branches);
@@ -370,7 +370,7 @@ public static class SharedConfig
     /// Every server and channel the branches name must exist for the bot, and it must be able to
     /// write the configuration into each state channel. Null when all is well.
     /// </summary>
-    private static string? Preflight(DiscordSocketClient client, List<FcBranch> branches, Configuration config)
+    private static string? Preflight(DiscordSocketClient client, List<FcBranch> branches)
     {
         foreach (var b in branches)
         {
@@ -391,30 +391,34 @@ public static class SharedConfig
                 return $"The bot needs View Channel, Send Messages, Attach Files and Read Message History in the state channel of {Label(b)}.";
         }
 
-        return CalendarPreflight(client, config);
+        return null;
     }
 
-    /// <summary>The calendar channel and every Apollo channel must exist, on one server, with the permissions the calendar needs.</summary>
-    private static string? CalendarPreflight(DiscordSocketClient client, Configuration config)
+    /// <summary>
+    /// The calendar channel and every Apollo channel must exist, on one server, with the
+    /// permissions the calendar needs. Looked up over REST when not cached: an archived thread is
+    /// not in the cache. Null when all is well.
+    /// </summary>
+    private static async Task<string?> CalendarPreflightAsync(DiscordSocketClient client, Configuration config, CancellationToken ct)
     {
         if (!config.IsCalendarConfigured)
             return null;
 
-        if (client.GetChannel(config.CalendarChannelId) is not SocketTextChannel calendar)
+        var options = new RequestOptions { CancelToken = ct };
+        if (await CalendarChannels.ResolveAsync(client, config.CalendarChannelId, options) is not { } calendar)
             return "The calendar channel was not found, or the bot cannot see it.";
 
-        var perms = ApolloReader.PermissionsIn(calendar.Guild, calendar);
-        var canSend = calendar is SocketThreadChannel ? perms.SendMessagesInThreads : perms.SendMessages;
-        if (!perms.ViewChannel || !canSend || !perms.EmbedLinks || !perms.AttachFiles || !perms.ReadMessageHistory)
+        if (CalendarChannels.Permissions(client, calendar) is not { } perms
+            || !perms.ViewChannel || !CalendarChannels.CanSend(calendar, perms) || !perms.EmbedLinks
+            || !perms.AttachFiles || !perms.ReadMessageHistory)
             return "The bot needs View Channel, Send Messages, Embed Links, Attach Files and Read Message History in the calendar channel.";
 
         foreach (var id in config.ApolloChannelIds.ToList())
         {
-            if (calendar.Guild.GetTextChannel(id) is not { } apollo)
+            if (await CalendarChannels.ResolveAsync(client, id, options) is not { } apollo || apollo.GuildId != calendar.GuildId)
                 return "An Apollo channel was not found on the calendar's server, or the bot cannot see it.";
 
-            var apolloPerms = ApolloReader.PermissionsIn(calendar.Guild, apollo);
-            if (!apolloPerms.ViewChannel || !apolloPerms.ReadMessageHistory)
+            if (CalendarChannels.Permissions(client, apollo) is not { ViewChannel: true, ReadMessageHistory: true })
                 return $"The bot needs View Channel and Read Message History in #{apollo.Name}.";
         }
 

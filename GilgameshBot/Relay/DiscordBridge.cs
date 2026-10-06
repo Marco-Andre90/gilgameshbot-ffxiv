@@ -313,7 +313,7 @@ public sealed class DiscordBridge : IDisposable
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
                 // The Free Company calendar, when it is on this server: refreshed hourly when due.
-                s.Calendar = new CalendarService(config, log, guild);
+                s.Calendar = new CalendarService(config, log, s.Client, guild.Id);
                 s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
 
                 // The bot's own slash commands. Registration is a few REST round trips against
@@ -462,7 +462,7 @@ public sealed class DiscordBridge : IDisposable
         return slash.HandleAsync(command, s.Cts.Token);
     }
 
-    /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered by the leader.</summary>
+    /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered like the commands.</summary>
     private Task OnAutocompleteAsync(Session s, SocketAutocompleteInteraction interaction)
     {
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
@@ -626,9 +626,7 @@ public sealed class DiscordBridge : IDisposable
         // Read before the first await: a teardown in between disposes the token source.
         var ct = s.Cts.Token;
         if (calendar.Current() is not { } setup)
-            return new CalendarOutcome(false,
-                "The calendar channel is not on this branch's Discord server, or the bot cannot see it. "
-                + "Connect with a character from a branch on the calendar's server.");
+            return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
 
         return await calendar.UpdateAsync(setup, force: true, change, ct);
     }

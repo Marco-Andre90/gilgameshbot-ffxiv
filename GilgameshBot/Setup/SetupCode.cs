@@ -268,8 +268,6 @@ public static class SetupCode
         if (parsed.CalendarChannel is not null)
         {
             (parsed.CalendarChannelId, parsed.ApolloChannelIds) = ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
-            if (parsed.CalendarChannelId == 0)
-                parsed.CalendarChannel = null;
         }
 
         payload = parsed;
@@ -352,10 +350,17 @@ public static class SetupCode
         config.BotToken = payload.Token;
         ApplyBranches(payload.Branches, payload.Heartbeat, payload.Stale, config);
 
+        // A code that carries calendar settings brings them, even "none" when they did not pass
+        // validation; one without them (an older plugin's) leaves the local ones, unless those now
+        // clash with the imported branches.
         if (payload.CalendarChannel is not null)
         {
             config.CalendarChannelId = payload.CalendarChannelId;
             config.ApolloChannelIds = payload.ApolloChannelIds;
+        }
+        else if (config.IsRelayOrStateChannel(config.CalendarChannelId) || config.IsRosterChannel(config.CalendarChannelId))
+        {
+            config.CalendarChannelId = 0;
         }
 
         // The code's revision, or 0 when it carries none: the next sync then brings in whatever

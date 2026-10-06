@@ -22,22 +22,23 @@ public static class ApolloReader
     /// when a channel is missing or unreadable: a calendar built from part of its sources would
     /// show events as gone.
     /// </summary>
-    public static async Task<List<CalendarEvent>> ReadAsync(SocketGuild guild, IEnumerable<ulong> channelIds, CancellationToken ct)
+    public static async Task<List<CalendarEvent>> ReadAsync(
+        DiscordSocketClient client, ulong guildId, IEnumerable<ulong> channelIds, CancellationToken ct)
     {
+        var options = new RequestOptions { CancelToken = ct };
         var posts = new List<ApolloPost>();
         foreach (var channelId in channelIds.Distinct())
         {
-            if (guild.GetTextChannel(channelId) is not { } channel)
-                throw new CalendarSourceException("The Apollo channel was not found, or the bot cannot see it.");
+            if (await CalendarChannels.ResolveAsync(client, channelId, options) is not { } channel || channel.GuildId != guildId)
+                throw new CalendarSourceException("An Apollo channel was not found on the calendar's server, or the bot cannot see it.");
 
             // Without Read Message History Discord answers an empty list, not an error.
-            var perms = PermissionsIn(guild, channel);
-            if (!perms.ViewChannel || !perms.ReadMessageHistory)
-                throw new CalendarSourceException("The bot needs View Channel and Read Message History in the Apollo channel.");
+            if (CalendarChannels.Permissions(client, channel) is not { ViewChannel: true, ReadMessageHistory: true })
+                throw new CalendarSourceException($"The bot needs View Channel and Read Message History in #{channel.Name}.");
 
             // Through IMessageChannel so the (empty) message cache is never preferred.
             var messages = await ((IMessageChannel)channel)
-                .GetMessagesAsync(Window, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
+                .GetMessagesAsync(Window, CacheMode.AllowDownload, options)
                 .FlattenAsync();
 
             var apollo = messages.Where(m => m.Author.Id == ApolloParser.ApolloBotId).ToList();
@@ -54,13 +55,6 @@ public static class ApolloReader
 
         return ApolloParser.ParseAll(posts);
     }
-
-    /// <summary>
-    /// The bot's permissions in <paramref name="channel"/>. A thread has no permission overwrites
-    /// of its own: they are its parent channel's.
-    /// </summary>
-    internal static ChannelPermissions PermissionsIn(SocketGuild guild, SocketTextChannel channel) =>
-        guild.CurrentUser.GetPermissions(channel is SocketThreadChannel { ParentChannel: SocketGuildChannel parent } ? parent : channel);
 
     private static ApolloPost ToPost(IMessage message)
     {
