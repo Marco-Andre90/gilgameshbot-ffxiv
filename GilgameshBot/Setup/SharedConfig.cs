@@ -24,6 +24,14 @@ public sealed class SharedConfigFile
     [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 10;
     [JsonPropertyName("stale")] public int Stale { get; set; } = 20;
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
+
+    /// <summary>
+    /// True on files from plugins that know the calendar fields. A file without it was published
+    /// by an older plugin, which drops those fields: applying it keeps the local calendar settings.
+    /// </summary>
+    [JsonPropertyName("calendar")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CarriesCalendar { get; set; }
 }
 
 /// <summary>What to tell the officer after publishing. Fixed text plus names from the config.</summary>
@@ -191,7 +199,27 @@ public static class SharedConfig
     /// </summary>
     public static void Apply(SharedConfigFile file, Configuration config)
     {
+        var previous = config.Branches.ToList();
         SetupCode.ApplyBranches(file.Branches, file.Heartbeat, file.Stale, config);
+
+        // Published by a plugin that predates the calendar: it never saw the calendar fields, so
+        // their absence means "unknown", not "removed". Keep this plugin's own.
+        if (file.CarriesCalendar != true)
+        {
+            foreach (var branch in config.Branches)
+            {
+                var old = previous.FirstOrDefault(b => string.Equals(b.World.Trim(), branch.World.Trim(), StringComparison.OrdinalIgnoreCase)
+                                                       && string.Equals(b.FcName.Trim(), branch.FcName.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (old is null)
+                    continue;
+
+                branch.CalendarChannelId = config.IsRelayOrStateChannel(old.CalendarChannelId) || config.IsRosterChannel(old.CalendarChannelId)
+                    ? 0
+                    : old.CalendarChannelId;
+                branch.ApolloChannelId = old.ApolloChannelId;
+            }
+        }
+
         config.SharedRevision = file.Revision;
         config.SharedPublishedBy = file.PublishedBy;
         config.SharedPublishedAtUtc = file.PublishedAtUtc;
@@ -273,6 +301,7 @@ public static class SharedConfig
                 Heartbeat = heartbeat,
                 Stale = stale,
                 Branches = SetupCode.ToSetupBranches(branches),
+                CarriesCalendar = true,
             };
 
             // Checked exactly as a reader will check it: a file that other plugins would ignore

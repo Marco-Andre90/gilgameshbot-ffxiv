@@ -52,7 +52,9 @@ public static class CalendarRenderer
             try
             {
                 using var image = new Image<Rgba32>(ImageConfig, Px(Layout.Width), Px(Layout.Height));
-                var seed = HashCode.Combine(page.Year, page.Month, themeKey);
+                // Not HashCode / string.GetHashCode: those change with every process.
+                var themeIndex = CalendarThemes.All.ToList().FindIndex(t => t.Key == themeKey);
+                var seed = (page.Year * 12 + page.Month) * 31 + themeIndex + 1;
 
                 var textured = themeKey switch
                 {

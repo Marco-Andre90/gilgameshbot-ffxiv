@@ -25,7 +25,7 @@ public sealed record CalendarOutcome(bool Ok, string Message);
 /// Every leader on the server runs the hourly loop, and nobody coordinates: before writing, a
 /// plugin reads the calendar message and leaves it alone when the bot edited it within the last
 /// <see cref="FreshFor"/>. Two plugins that still write at the same moment write the same thing
-/// (the picture is deterministic), and a duplicate message is deleted by the next update.
+/// (the picture is seeded by month and theme), and a duplicate message is deleted by the next pass.
 /// </para>
 /// <para>
 /// The calendar message is the bot's message that starts with <see cref="CalendarMessage.Marker"/>:
@@ -158,8 +158,10 @@ public sealed class CalendarService
             var options = new RequestOptions { CancelToken = ct };
             var found = await FindAsync(channel, options);
 
-            var stored = found.Message is { } message
-                ? CalendarSettings.FromCustomIds(ApolloReader.CustomIds(message.Components))
+            // A calendar that was unpinned is no longer found, but its copy still holds the settings.
+            var holder = found.Message ?? found.Strays.OrderByDescending(m => m.Id).FirstOrDefault();
+            var stored = holder is not null
+                ? CalendarSettings.FromCustomIds(ApolloReader.CustomIds(holder.Components))
                 : null;
             var settings = stored ?? CalendarSettings.Default;
             if (change is not null)
@@ -167,6 +169,11 @@ public sealed class CalendarService
                 settings = change(settings);
                 force = true;
             }
+
+            // Duplicates go even when the calendar itself is fresh: two plugins that posted it at the
+            // same moment would otherwise leave both copies until the next redraw.
+            if (found.Message is not null)
+                await DeleteAsync(found.Strays, options);
 
             if (!force && found.Message is { } existing
                        && DateTimeOffset.UtcNow - (existing.EditedTimestamp ?? existing.Timestamp) < FreshFor)
@@ -214,17 +221,8 @@ public sealed class CalendarService
                 }
             }
 
-            foreach (var stray in found.Strays)
-            {
-                try
-                {
-                    await stray.DeleteAsync(options);
-                }
-                catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    // Already gone.
-                }
-            }
+            if (found.Message is null)
+                await DeleteAsync(found.Strays, options);
 
             log.Information("Calendar in #{Channel} updated: {Count} events, theme {Theme}, {Zone}.",
                 channel.Name, events.Count, settings.Theme, zone.Key);
@@ -271,6 +269,21 @@ public sealed class CalendarService
             return new CalendarOutcome(false,
                 "The calendar channel is not empty, so the bot has to pin the calendar and could not. "
                 + "Use an empty channel, or give the bot Pin Messages there.");
+        }
+    }
+
+    private static async Task DeleteAsync(IEnumerable<IMessage> messages, RequestOptions options)
+    {
+        foreach (var m in messages)
+        {
+            try
+            {
+                await m.DeleteAsync(options);
+            }
+            catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Already gone.
+            }
         }
     }
 
@@ -426,6 +439,20 @@ public sealed class CalendarService
         catch (Exception ex)
         {
             log.Warning(ex, "Answering a calendar click failed.");
+
+            // Never leave the member looking at "thinking…" until Discord gives up.
+            try
+            {
+                await component.ModifyOriginalResponseAsync(p =>
+                {
+                    p.Content = "The calendar could not be shown. Try again in a moment.";
+                    p.AllowedMentions = AllowedMentions.None;
+                }, options);
+            }
+            catch
+            {
+                // Best effort.
+            }
         }
     }
 

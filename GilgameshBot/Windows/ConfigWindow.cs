@@ -1305,7 +1305,8 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (ImGui.Button(calendarUpdate is null ? "Update now" : "Updating…", ImGuiHelpers.ScaledVector2(140, 0)))
             {
-                calendarUpdate = plugin.Bridge.UpdateCalendarAsync(selected);
+                // Off the draw thread: the update ends in drawing and encoding an image.
+                calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync(selected));
                 calendarMessage = null;
             }
         }

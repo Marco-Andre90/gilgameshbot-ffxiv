@@ -40,7 +40,16 @@ public static class ApolloReader
                 .GetMessagesAsync(Window, CacheMode.AllowDownload, new RequestOptions { CancelToken = ct })
                 .FlattenAsync();
 
-            posts.AddRange(messages.Where(m => m.Author.Id == ApolloParser.ApolloBotId).Select(ToPost));
+            var apollo = messages.Where(m => m.Author.Id == ApolloParser.ApolloBotId).ToList();
+
+            // Without the Message Content intent Discord still lists Apollo's posts, but with their
+            // embeds and buttons stripped: they would read as "no events" and empty the calendar.
+            if (apollo.Count > 0 && apollo.All(m => m.Embeds.Count == 0))
+                throw new CalendarSourceException(
+                    "Discord hides Apollo's posts from the bot. Switch on Message Content Intent for the bot "
+                    + "in the Discord Developer Portal (Bot tab).");
+
+            posts.AddRange(apollo.Select(ToPost));
         }
 
         return ApolloParser.ParseAll(posts);

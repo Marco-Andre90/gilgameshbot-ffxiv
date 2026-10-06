@@ -23,8 +23,6 @@ internal sealed class Canvas
 
     public float Scale { get; }
 
-    public IImageProcessingContext Context => ctx;
-
     public PointF P(float x, float y) => new(x * Scale, y * Scale);
 
     // --- Shapes -----------------------------------------------------------------------------

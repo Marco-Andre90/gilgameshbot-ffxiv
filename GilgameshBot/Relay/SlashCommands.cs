@@ -79,8 +79,9 @@ public sealed class SlashCommands
     /// Makes sure this branch's server has our commands. Reads what is registered first and only
     /// writes the ones that are missing or differ, one by one: writing a command under an existing
     /// name updates it in place, so its id — and the server owner's per-role grants, which hang
-    /// off it — survive. Commands this version does not know are left alone, so an older plugin
-    /// and a newer one do not take each other's commands away.
+    /// off it — survive. Commands this version does not know are left alone, so a future version's
+    /// commands survive this one. (Versions before the calendar still bulk-overwrite their three
+    /// commands, removing /calendar until a current plugin connects again.)
     /// </summary>
     public async Task RegisterAsync(CancellationToken ct)
     {
