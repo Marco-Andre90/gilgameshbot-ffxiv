@@ -19,14 +19,15 @@ internal static class CleanTheme
     private static readonly Color ChipFill = Color.ParseHex("0f6e56");
     private static readonly Color ChipText = Color.ParseHex("e1f5ee");
 
-    private const float ChipTop = 22;
-    private const float ChipHeight = 16;
+    private const float ChipTop = 20;
+    private const float ChipHeight = 17;
     private const float ChipGap = 2;
 
     public static void Draw(Canvas c, CalendarPage page)
     {
-        c.Fill(Background, c.Rect(0, 0, Layout.Width, Layout.Height));
-        c.Stroke(Frame, 2, c.RoundRect(1, 1, Layout.Width - 2, Layout.Height - 2, 6));
+        var height = Layout.Height(page);
+        c.Fill(Background, c.Rect(0, 0, Layout.Width, height));
+        c.Stroke(Frame, 2, c.RoundRect(1, 1, Layout.Width - 2, height - 2, 6));
 
         var title = c.Font(CalendarFonts.Body, 21);
         c.Text($"{CalendarRenderer.MonthName(page.Month)} {page.Year}", title, Title,
@@ -43,14 +44,14 @@ internal static class CleanTheme
                 HorizontalAlignment.Center, VerticalAlignment.Center);
         }
 
-        var number = c.Font(CalendarFonts.Body, 12);
-        var chip = c.Font(CalendarFonts.Body, 11);
+        var number = c.Font(CalendarFonts.Body, 13);
+        var chip = c.Font(CalendarFonts.Body, 12);
         var slots = (int)((Layout.CellHeight - ChipTop - 2) / (ChipHeight + ChipGap));
 
         foreach (var (x, y, date, inMonth) in Layout.Cells(page))
         {
             c.Fill(inMonth ? Day : OtherMonth, c.RoundRect(x, y, Layout.CellWidth, Layout.CellHeight, 3));
-            c.Text(date.Day.ToString(), number, inMonth ? DayNumber : OtherNumber, x + 5, y + 3);
+            c.Text(date.Day.ToString(), number, inMonth ? DayNumber : OtherNumber, x + 5, y + 2);
 
             if (inMonth && page.Today == date)
                 c.Stroke(Today, 2.5f, c.RoundRect(x + 1.25f, y + 1.25f, Layout.CellWidth - 2.5f, Layout.CellHeight - 2.5f, 3));

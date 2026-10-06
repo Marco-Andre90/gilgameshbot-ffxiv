@@ -6,9 +6,6 @@ namespace GilgameshBot.Calendar;
 /// </summary>
 public sealed class CalendarPage
 {
-    /// <summary>Rows in the grid: always six weeks, like the in-game calendars, so every image has the same size.</summary>
-    public const int Weeks = 6;
-
     private CalendarPage(int year, int month, DayOfWeek firstDay, DateOnly? today, Dictionary<DateOnly, List<string>> entries)
     {
         Year = year;
@@ -37,6 +34,19 @@ public sealed class CalendarPage
         {
             var offset = ((int)FirstOfMonth.DayOfWeek - (int)FirstDay + 7) % 7;
             return FirstOfMonth.AddDays(-offset);
+        }
+    }
+
+    /// <summary>
+    /// Rows in the grid: only the weeks the month touches (usually five). Fewer rows keep the
+    /// picture wider than tall, which Discord shows larger.
+    /// </summary>
+    public int Weeks
+    {
+        get
+        {
+            var offset = FirstOfMonth.DayNumber - GridStart.DayNumber;
+            return (offset + DateTime.DaysInMonth(Year, Month) + 6) / 7;
         }
     }
 

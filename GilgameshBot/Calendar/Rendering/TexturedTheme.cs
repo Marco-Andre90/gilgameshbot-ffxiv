@@ -132,9 +132,10 @@ internal static class TexturedTheme
     private static void DrawBase(
         Canvas c, CalendarPage page, TexturedStyle s, List<(float X, float Y, DateOnly Date, bool InMonth)> cells, Random random)
     {
-        c.Fill(s.Background, c.Rect(0, 0, Layout.Width, Layout.Height));
-        c.Stroke(s.Frame, 3, c.Rect(2, 2, Layout.Width - 4, Layout.Height - 4));
-        c.Stroke(s.FrameInner, 1, c.Rect(6, 6, Layout.Width - 12, Layout.Height - 12));
+        var height = Layout.Height(page);
+        c.Fill(s.Background, c.Rect(0, 0, Layout.Width, height));
+        c.Stroke(s.Frame, 3, c.Rect(2, 2, Layout.Width - 4, height - 4));
+        c.Stroke(s.FrameInner, 1, c.Rect(6, 6, Layout.Width - 12, height - 12));
 
         var plateX = (Layout.Width - PlateWidth) / 2;
         if (s.Decorations)
@@ -277,8 +278,8 @@ internal static class TexturedTheme
         if (s.Decorations)
             Spooky.GridDecorations(c, page, cells, random);
 
-        var number = c.Font(CalendarFonts.Body, 12);
-        var label = c.Font(CalendarFonts.Body, 11);
+        var number = c.Font(CalendarFonts.Body, 13);
+        var label = c.Font(CalendarFonts.Body, 12);
         const float w = Layout.CellWidth;
         const float h = Layout.CellHeight;
 
@@ -291,15 +292,15 @@ internal static class TexturedTheme
             if (!inMonth || !page.Entries.TryGetValue(date, out var titles))
                 continue;
 
-            var slots = (int)((y + h - 2 - (top + 17)) / 14);
+            var slots = (int)((y + h - 2 - (top + 17)) / 16);
             var lines = Layout.Lines(titles, Math.Max(1, slots));
             for (var i = 0; i < lines.Count; i++)
             {
                 // Stacked from the bottom of the day, like the in-game calendar's banners.
-                var ly = y + h - 15 - (lines.Count - 1 - i) * 14;
-                c.Fill(s.LabelFill, c.Rect(x + 2, ly, w - 4, 13));
-                c.Fill(s.LabelBar, c.Rect(x + 2, ly, 3, 13));
-                c.Text(c.Fit(lines[i], label, w - 14), label, Color.White, x + 8, ly + 6.5f, v: VerticalAlignment.Center);
+                var ly = y + h - 17 - (lines.Count - 1 - i) * 16;
+                c.Fill(s.LabelFill, c.Rect(x + 2, ly, w - 4, 15));
+                c.Fill(s.LabelBar, c.Rect(x + 2, ly, 3, 15));
+                c.Text(c.Fit(lines[i], label, w - 14), label, Color.White, x + 8, ly + 7.5f, v: VerticalAlignment.Center);
             }
         }
 

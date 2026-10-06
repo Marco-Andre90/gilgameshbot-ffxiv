@@ -26,7 +26,7 @@ namespace GilgameshBot.Calendar.Rendering;
 /// </remarks>
 public static class CalendarRenderer
 {
-    /// <summary>Layout units are multiplied by this; 680 × 612 units become a 1020 × 918 image.</summary>
+    /// <summary>Layout units are multiplied by this; 680 units wide become 1020 pixels.</summary>
     private const float Scale = 1.5f;
 
     private static readonly object Gate = new();
@@ -51,7 +51,7 @@ public static class CalendarRenderer
         {
             try
             {
-                using var image = new Image<Rgba32>(ImageConfig, Px(Layout.Width), Px(Layout.Height));
+                using var image = new Image<Rgba32>(ImageConfig, Px(Layout.Width), Px(Layout.Height(page)));
                 // Not HashCode / string.GetHashCode: those change with every process.
                 var themeIndex = CalendarThemes.All.ToList().FindIndex(t => t.Key == themeKey);
                 var seed = (page.Year * 12 + page.Month) * 31 + themeIndex + 1;
@@ -107,11 +107,15 @@ internal static class Layout
     public const float HeaderTop = 58;
     public const float HeaderHeight = 22;
     public const float Gap = 3;
-    public const float CellHeight = 84;
+    /// <summary>
+    /// Low cells: Discord shows a picture at most about 550 × 350 pixels in the chat, so the wider
+    /// it is against its height, the larger it appears. Room for two lines of events.
+    /// </summary>
+    public const float CellHeight = 64;
 
     public const float CellWidth = (Width - 2 * GridX - 6 * Gap) / 7;
     public const float CellsTop = HeaderTop + HeaderHeight + Gap;
-    public const float Height = CellsTop + CalendarPage.Weeks * CellHeight + (CalendarPage.Weeks - 1) * Gap + 10;
+    public static float Height(CalendarPage page) => CellsTop + page.Weeks * CellHeight + (page.Weeks - 1) * Gap + 10;
 
     public static float ColumnX(int column) => GridX + column * (CellWidth + Gap);
 
@@ -121,7 +125,7 @@ internal static class Layout
     public static IEnumerable<(float X, float Y, DateOnly Date, bool InMonth)> Cells(CalendarPage page)
     {
         var start = page.GridStart;
-        for (var i = 0; i < CalendarPage.Weeks * 7; i++)
+        for (var i = 0; i < page.Weeks * 7; i++)
         {
             var date = start.AddDays(i);
             yield return (ColumnX(i % 7), RowY(i / 7), date, date.Month == page.Month && date.Year == page.Year);
