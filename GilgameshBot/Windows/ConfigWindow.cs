@@ -80,6 +80,9 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool calendarBuffersLoaded;
     private string calendarChannelIdBuffer = string.Empty;
     private string apolloChannelIdsBuffer = string.Empty;
+    private string calendarNameBuffer = string.Empty;
+    private int calendarThemeIndex;
+    private int calendarZoneIndex;
     private string? calendarMessage;
     private bool calendarMessageIsWarning;
     private Task<CalendarOutcome>? calendarUpdate;
@@ -1253,6 +1256,9 @@ public sealed class ConfigWindow : Window, IDisposable
             SaveCalendarSettings();
 
         SectionGap();
+        DrawCalendarLook();
+
+        SectionGap();
         SectionHeader("Update");
 
         var canUpdate = calendarUpdate is null && config.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
@@ -1281,6 +1287,72 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGuiHelpers.ScaledDummy(4);
             TextWrappedColoured(calendarMessageIsWarning ? Yellow : Green, msg);
         }
+    }
+
+    /// <summary>
+    /// The name, theme and time zone everyone sees. They are kept on the calendar message in
+    /// Discord, not here, so each button writes its one setting there straight away.
+    /// </summary>
+    private void DrawCalendarLook()
+    {
+        SectionHeader("What everyone sees");
+
+        TextWrappedColoured(Grey,
+            "Kept on the calendar message in Discord, so they apply to everybody at once. The same as /calendar name, "
+            + "/calendar theme and /calendar timezone in Discord. The Theme button under the calendar only previews a theme "
+            + "for the member who clicks it.");
+        ImGuiHelpers.ScaledDummy(4);
+
+        var canApply = calendarUpdate is null && config.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
+        var buttonWidth = 130 * ImGuiHelpers.GlobalScale;
+        var fieldWidth = ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X;
+
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.InputTextWithHint("##calendarName", CalendarSettings.DefaultName, ref calendarNameBuffer, CalendarSettings.MaxNameLength);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set name", new Vector2(buttonWidth, 0)))
+            {
+                var name = CalendarSettings.NormalizeName(calendarNameBuffer);
+                ApplyCalendarChange(s => s with { Name = name });
+            }
+        }
+
+        var themes = CalendarThemes.All.Select(t => t.Label).ToArray();
+        calendarThemeIndex = Math.Clamp(calendarThemeIndex, 0, themes.Length - 1);
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.Combo("##calendarTheme", ref calendarThemeIndex, themes, themes.Length);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set theme", new Vector2(buttonWidth, 0)))
+            {
+                var theme = CalendarThemes.All[calendarThemeIndex].Key;
+                ApplyCalendarChange(s => s with { Theme = theme });
+            }
+        }
+
+        var zones = CalendarTimeZones.All.Select(z => z.Label).ToArray();
+        calendarZoneIndex = Math.Clamp(calendarZoneIndex, 0, zones.Length - 1);
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.Combo("##calendarZone", ref calendarZoneIndex, zones, zones.Length);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set time zone", new Vector2(buttonWidth, 0)))
+            {
+                var zone = CalendarTimeZones.All[calendarZoneIndex].Key;
+                ApplyCalendarChange(s => s with { TimeZone = zone });
+            }
+        }
+    }
+
+    private void ApplyCalendarChange(Func<CalendarSettings, CalendarSettings> change)
+    {
+        // Off the draw thread: the update ends in drawing and encoding an image.
+        calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync(change));
+        calendarMessage = null;
     }
 
     private void SaveCalendarSettings()

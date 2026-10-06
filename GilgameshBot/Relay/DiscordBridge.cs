@@ -608,7 +608,13 @@ public sealed class DiscordBridge : IDisposable
     public bool CanUpdateCalendar => State == BridgeState.Connected && session?.Calendar is not null;
 
     /// <summary>Redraws the calendar now, from the settings window.</summary>
-    public async Task<CalendarOutcome> UpdateCalendarAsync()
+    public Task<CalendarOutcome> UpdateCalendarAsync() => UpdateCalendarAsync(change: null);
+
+    /// <summary>
+    /// Changes the calendar's settings everyone sees (name, theme, time zone) and redraws it, from
+    /// the settings window. The same as /calendar, without depending on the slash command.
+    /// </summary>
+    public async Task<CalendarOutcome> UpdateCalendarAsync(Func<CalendarSettings, CalendarSettings>? change)
     {
         var s = session;
         if (s?.Calendar is not { } calendar || State != BridgeState.Connected)
@@ -624,7 +630,7 @@ public sealed class DiscordBridge : IDisposable
                 "The calendar channel is not on this branch's Discord server, or the bot cannot see it. "
                 + "Connect with a character from a branch on the calendar's server.");
 
-        return await calendar.UpdateAsync(setup, force: true, change: null, ct);
+        return await calendar.UpdateAsync(setup, force: true, change, ct);
     }
 
     // --- Shared configuration --------------------------------------------------------------
