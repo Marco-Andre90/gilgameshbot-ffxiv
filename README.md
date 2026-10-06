@@ -13,6 +13,7 @@ One bot serves any number of Free Company branches (one per home world + Free Co
 - The channel gets **"GilgameshBot Online!"** when relaying starts and **"GilgameshBot Offline."** (naming who stopped) when the last member stops relaying cleanly (logout, `/gilgamesh disconnect`, plugin unload). If the game crashes, no message is posted, but the bot's presence in the member list goes offline on its own, so members can still tell whether chat is being relayed.
 - **One setup code configures everybody else.** The member who created the bot exports a single string carrying the token and *every* branch; every other member imports it and is ready to relay on any of their characters, without ever touching a Discord ID.
 - **Configuration changes reach everybody on their own.** The branch table (without the token) is published to Discord, and every member's plugin takes over a newer version the next time it connects. See [Changing the configuration later](#changing-the-configuration-later).
+- **A Free Company calendar in Discord.** The events created with [Apollo](https://apollo.fyi) are drawn as a month calendar, kept up to date in a channel of your choice, with buttons to browse months, list a day's events and try other themes. See [FC calendar](#fc-calendar).
 - **Several members can run the plugin at the same time** without duplicating anything. The plugin needs a *state channel* for this. Each running plugin keeps one presence message there; the one that has been running longest relays, the others sit on standby and show their place in the queue. When the relaying member logs out, the next in line takes over — cleanly and immediately, or within about 20 seconds if the relaying member's game closed unexpectedly, once that instance's lease expires. Messages received while on standby are dropped, never replayed, so nothing is ever posted twice.
 
 ## Requirements
@@ -63,12 +64,12 @@ Do the [Discord setup](#discord-setup-once-per-branch) below (once per branch), 
 
 ### Changing the configuration later
 
-The branch table (every branch's server, channels and roster settings) and the presence timers form the **shared configuration**. It is kept in Discord, in a bot message in each branch's state channel, with a `gilgamesh-config.json` file attached. The **bot token is not part of it**: the token only ever travels in a setup code.
+The branch table (every branch's server, channels, roster and calendar settings) and the presence timers form the **shared configuration**. It is kept in Discord, in a bot message in each branch's state channel, with a `gilgamesh-config.json` file attached. The **bot token is not part of it**: the token only ever travels in a setup code.
 
-- **To change it:** edit the branches (Discord tab) or roster settings (FC roster tab), then click **Publish to Discord** on the Advanced tab and confirm. Anyone whose plugin is connected can publish, so agree in your FC on who does. The Advanced tab shows which revision your plugin follows and who published it.
+- **To change it:** edit the branches (Discord tab), roster settings (FC roster tab) or calendar settings (Calendar tab), then click **Publish to Discord** on the Advanced tab and confirm. Anyone whose plugin is connected can publish, so agree in your FC on who does. The Advanced tab shows which revision your plugin follows and who published it.
 - **Everybody else does nothing.** Each plugin checks when it connects (log in, or `/gilga connect`). When it finds a newer revision, it replaces its own branch table and timers with it, says so in game chat, and reconnects if its own branch moved. Personal options (auto-connect, relaying your own lines, …) are never touched. Local branch edits that were not published are overwritten by the next newer revision.
 - **Setup codes catch up on their own.** A code fetched with `/setupcode` or sent with `/gilga send` carries the revision of the plugin that sent it. If that plugin connected before the latest publish, the code is one revision behind, and the new member's plugin takes over the newest one as soon as it connects.
-- **Publishing is refused** if any branch is incomplete, if the bot cannot see a branch's server, relay, state or roster channel, if it lacks *Attach Files* in a state channel, or if Discord already holds a newer revision than yours. In that last case, reconnect so your plugin takes it over, redo your change on top of it and publish again.
+- **Publishing is refused** if any branch is incomplete, if the bot cannot see a branch's server, relay, state, roster, calendar or Apollo channel, if it lacks *Attach Files* in a state or calendar channel, or if Discord already holds a newer revision than yours. In that last case, reconnect so your plugin takes it over, redo your change on top of it and publish again.
 - **A new bot token still needs new setup codes.** Put the new token in first and connect, so that your plugin is the one relaying. Every other plugin then fails to connect with the old token, and its member fetches a fresh code with `/setupcode`.
 
    **Recommended — send it by Discord DM.** While connected, type `/gilga send <discord username>` in game (or use **Send by DM** on the Status tab). The bot sends that member a direct message containing the code; they copy the line and type `/gilga import`. Nothing ever passes through your own chat window or clipboard.
@@ -87,8 +88,8 @@ Members with characters in more than one branch need nothing extra: one setup co
 ## Discord setup (once per branch)
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → name it `GilgameshBot`.
-2. **Bot** tab → **Reset Token** → copy the token. You will paste it into the plugin. No privileged intents are needed — the bot reads only its own presence messages, over REST.
-3. **OAuth2 → URL Generator**: scopes `bot` **and** `applications.commands`; permissions **View Channels**, **Send Messages**, **Read Message History** and **Attach Files** (the shared configuration and the FC roster are kept as files), plus optionally **Pin Messages** if you use the [FC roster](#fc-roster). Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
+2. **Bot** tab → **Reset Token** → copy the token. You will paste it into the plugin. If you use the [FC calendar](#fc-calendar), also switch on **Message Content Intent** under *Privileged Gateway Intents* and click **Save Changes**: the bot reads Apollo's event posts. Nothing else needs a privileged intent.
+3. **OAuth2 → URL Generator**: scopes `bot` **and** `applications.commands`; permissions **View Channels**, **Send Messages**, **Read Message History** and **Attach Files** (the shared configuration and the FC roster are kept as files), plus optionally **Pin Messages** if you use the [FC roster](#fc-roster) or the [FC calendar](#fc-calendar) in a channel that already has messages. Do **not** grant *Mention Everyone*: the plugin never mass-pings, and only roles marked *Allow anyone to @mention this role* can be mentioned from the game. Open the generated URL and invite the bot to your server.
 
    *Already invited the bot before the slash commands existed?* Open the generated URL again with both scopes ticked and authorise it for the same server. It adds the `applications.commands` scope; no new permissions are requested.
 4. In Discord, enable **Settings → Advanced → Developer Mode**, then right-click the server → **Copy Server ID**, and right-click the target channel → **Copy Channel ID**.
@@ -116,20 +117,21 @@ The state channel fills up with one short message per running plugin (`🎮 [rel
 
 ## Discord commands
 
-The bot answers three slash commands in each branch's Discord server.
+The bot answers four slash commands in each branch's Discord server.
 
 | Command | Effect |
 |---|---|
 | `/setupcode` | The bot DMs you your own setup code, exactly as `/gilga send` would. The reply in the channel is ephemeral (only you see it) and never contains the code. The DM is deleted after 5 minutes if you don't import it, and replaced with a receipt as soon as you do |
 | `/relaystatus` | Ephemeral reply: which character is relaying this branch right now, how many members are on standby, and the branch name |
 | `/fcscan world` | Runs a [roster scan](#fc-roster) of a Free Company: pick it from the list, which shows the ones set up on this server as *FC name @ World*. The report goes to the roster channel; the ephemeral reply says how it went |
+| `/calendar theme`, `/calendar timezone`, `/calendar refresh` | Changes the [FC calendar](#fc-calendar)'s theme or time zone (pick from the list), or redraws it now. Run it in the calendar's channel when the server has more than one calendar |
 
 Two things to know:
 
 - **They only work while at least one member's plugin is connected.** The bot has no server of its own — it runs inside the plugin. With nobody in game, Discord shows *"The application did not respond"*.
 - **`/setupcode` is gated by Discord.** Its command permissions decide who can see and run it: **Manage Server** until the server owner opens it to specific roles under *Server Settings → Integrations → GilgameshBot*. Keep that list short: anyone who can run it gets the bot token.
 
-`/relaystatus` and `/fcscan` carry nothing sensitive, so the plugin does not gate them further: anyone Discord lets run them gets an answer.
+`/relaystatus`, `/fcscan` and `/calendar` carry nothing sensitive, so the plugin does not gate them further: anyone Discord lets run them gets an answer.
 
 ## FC roster
 
@@ -141,6 +143,18 @@ A manual scan reads a Free Company's member list from its public Lodestone page 
 - **One report per Free Company.** Each scan edits that Free Company's report in place (reposting it only when it needs a different number of messages), deletes any older copy, and posts a short *Roster updated* line with a link to it, replacing the previous one, so the channel shows when the last scan ran. Discord sends no notification for an edit; the new line is what shows up as unread.
 - **The report** lists who joined, who left and who changed name since the last scan (members are tracked by Lodestone character ID, so a rename is never a leave + join), and the members who have been in the starter rank for at least the Free Company's **days before promotion** (set on the same tab, 30 by default), longest first, out of how many are in it. The first scan only records the list: members already in the starter rank count from the date of the first scan, shown as *N days+ (before* that date*)*.
 - **Limits.** The Lodestone lags the game by a few hours, and a date is the scan that first saw the change, so scan every week or two rather than expecting exact days. If the Lodestone is down, answers with an incomplete list, or changes during the scan, nothing is posted or saved: try again later.
+
+## FC calendar
+
+A month calendar in a Discord channel, drawn by the bot from the events your Free Company creates with [Apollo](https://apollo.fyi).
+
+- **Set it up** on the plugin's *Calendar* tab, per Free Company: the **calendar channel** and the **Apollo channel** (where Apollo posts the events). Both are part of the [shared configuration](#changing-the-configuration-later). Branches on one server that use the same calendar channel share one calendar, with the events of all their Apollo channels.
+- **Discord side.** Switch on **Message Content Intent** for the bot in the Developer Portal (see [Discord setup](#discord-setup-once-per-branch)): without it Discord hides Apollo's posts from the bot. In the Apollo channel the bot only reads: *View Channel* and *Read Message History*. In the calendar channel it needs *View Channel*, *Send Messages*, *Attach Files* and *Read Message History*.
+- **Calendar channel.** It must not be any branch's relay, state or roster channel. Create it empty: the calendar is then its first message and stays on top while members talk under it. In a channel that already has messages the bot pins the calendar instead, which needs *Pin Messages*. Only the bot edits it.
+- **What it shows.** A picture of the current month with each event's title on its day, and under it a list of the next events with their times, which Discord shows in each member's own time zone. The picture has no times: it places events on days in the calendar's time zone, US Central by default. Each title links to the Apollo post, where members sign up.
+- **Buttons.** *◀* and *▶* show the previous or next month (one month each way), *Day details…* lists a day's events, and *Theme* shows the calendar in another theme. Each answer is ephemeral: only the member who clicked sees it, and the calendar in the channel does not change.
+- **Themes.** *Clean* (the default, easiest to read on a phone), *World of Warcraft* and *Halloween*, plus *Seasonal*: Halloween in October, Clean the rest of the year. Officers set the theme everyone sees with `/calendar theme`, and the time zone with `/calendar timezone`. Both are kept on the calendar message itself: deleting it resets them.
+- **Updates.** The calendar is redrawn every hour while someone's plugin is connected (the relaying member of a branch on that server does it), with *Update now* on the Calendar tab, or with `/calendar refresh`. With nobody in game, the last calendar stays in the channel and the buttons do not answer. Apollo posts each new occurrence of a weekly event a few days after the previous one; the calendar shows only the occurrences Apollo has posted, so a cancelled one never lingers. If the Apollo channel cannot be read, the calendar is left as it was.
 
 ## Options
 
@@ -191,8 +205,9 @@ Type `@` followed by the person's Discord **username** (the lowercase handle), f
 - **"The bot cannot read #state-channel"** / connected but on standby with no leader — the bot is missing **Read Message History** on the state channel. Discord answers an empty list instead of an error in that case, so the plugin cannot see its own presence message. Grant the permission (channel → Edit → Permissions → the bot's role), then delete any leftover presence messages in that channel.
 - **Two members, messages still duplicated** — both must have the **same** state channel ID on that branch, and must reconnect after saving it. `/gilgamesh status` says which one is relaying.
 - **Connected but nothing arrives** — confirm the message really went to the Free Company channel (`/fc`), and that *Relay Free Company chat* is on. `/xllog` shows the plugin's log.
-- **"The application did not respond" on `/setupcode`, `/relaystatus` or `/fcscan`** — nobody's plugin is connected to that branch right now, or the members who are connected have not settled on a relaying instance yet (it takes a few seconds after a login). Only the member whose plugin is currently relaying answers the commands. Check the bot's presence in the member list: grey means nobody is in game.
+- **"The application did not respond" on `/setupcode`, `/relaystatus`, `/fcscan`, `/calendar` or a calendar button** — nobody's plugin is connected to that branch right now, or the members who are connected have not settled on a relaying instance yet (it takes a few seconds after a login). Only the member whose plugin is currently relaying answers the commands. Check the bot's presence in the member list: grey means nobody is in game.
 - **The commands don't show up when typing `/`** — either the bot was invited without the `applications.commands` scope (open the OAuth2 URL again with both scopes; the plugin's log says *Missing Access* when registration fails), or the command is not allowed for your roles. Only members with **Manage Server** see it until the server owner adds roles under *Server Settings → Integrations → GilgameshBot → Command permissions*.
+- **The calendar stays empty although Apollo has events** — the bot cannot read Apollo's posts: switch on **Message Content Intent** in the Developer Portal (Bot tab), check that the Apollo channel ID is right, and that the bot has *View Channel* and *Read Message History* there. Then click *Update now* on the Calendar tab.
 - **Mentions don't resolve** — the name must match the username or display name exactly (roles must be mentionable); check the exact handle in the member list.
 
 ## For contributors
@@ -230,3 +245,5 @@ GilgameshBot is an independent implementation. It was informed by prior FFXIV↔
 Copyright (C) 2026 Marco André Innocenti
 
 GilgameshBot is free software, licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-only)** — see [`LICENSE`](LICENSE) for the full text. In short: you may use, study, modify and redistribute it, but any modified version you distribute *or make available to users over a network* must also be offered under the AGPL-3.0 with its source (see section 13 of the license). It comes with no warranty.
+
+The calendar uses the fonts [Cinzel](https://fonts.google.com/specimen/Cinzel), [Creepster](https://fonts.google.com/specimen/Creepster) and [Noto Sans](https://fonts.google.com/noto/specimen/Noto+Sans), under the SIL Open Font License 1.1 (`GilgameshBot/Calendar/Fonts/OFL-*.txt`), and draws with [ImageSharp](https://github.com/SixLabors/ImageSharp), under the Six Labors Split License.

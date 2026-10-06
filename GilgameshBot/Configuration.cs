@@ -69,6 +69,18 @@ public sealed class FcBranch
     /// </summary>
     public ulong RosterChannelId { get; set; }
 
+    /// <summary>
+    /// Channel that holds the Free Company calendar. Branches on one server that name the same
+    /// channel share one calendar. 0 when this branch has no calendar.
+    /// </summary>
+    public ulong CalendarChannelId { get; set; }
+
+    /// <summary>Channel where Apollo posts this branch's events; only ever read. 0 when this branch has no calendar.</summary>
+    public ulong ApolloChannelId { get; set; }
+
+    /// <summary>True when this branch has a calendar: a server, a calendar channel and an Apollo channel.</summary>
+    public bool IsCalendarConfigured => GuildId != 0 && CalendarChannelId != 0 && ApolloChannelId != 0;
+
     /// <summary>True when this branch can be scanned: it has a server, a Lodestone ID, a starter rank and a roster channel.</summary>
     public bool IsRosterConfigured =>
         GuildId != 0
@@ -258,7 +270,15 @@ public sealed class Configuration : IPluginConfiguration
     /// channel must never be one: the roster scan edits and deletes the bot's messages there.
     /// </summary>
     public bool IsRelayOrStateChannel(ulong channelId) =>
-        Branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
+        Branches.ToList().Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
+
+    /// <summary>True when <paramref name="channelId"/> is some branch's roster channel. A calendar channel must never be one.</summary>
+    public bool IsRosterChannel(ulong channelId) =>
+        channelId != 0 && Branches.ToList().Any(b => b.RosterChannelId == channelId);
+
+    /// <summary>True when <paramref name="channelId"/> is some branch's calendar channel. A roster channel must never be one.</summary>
+    public bool IsCalendarChannel(ulong channelId) =>
+        channelId != 0 && Branches.ToList().Any(b => b.CalendarChannelId == channelId);
 
     /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
     public FcBranch? FindBranch(string world, string fcTag, string fcName)

@@ -2,13 +2,14 @@ using Dalamud.Plugin.Services;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
+using GilgameshBot.Calendar;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
 
 namespace GilgameshBot.Relay;
 
 /// <summary>
-/// The bot's own Discord slash commands: <c>/setupcode</c>, <c>/relaystatus</c> and <c>/fcscan</c>.
+/// The bot's own Discord slash commands: <c>/setupcode</c>, <c>/relaystatus</c>, <c>/fcscan</c> and <c>/calendar</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -33,11 +34,18 @@ public sealed class SlashCommands
     public const string SetupCodeCommand = "setupcode";
     public const string RelayStatusCommand = "relaystatus";
     public const string FcScanCommand = "fcscan";
+    public const string CalendarCommand = "calendar";
 
     private const string SetupCodeDescription = "Get your GilgameshBot setup code as a direct message.";
     private const string RelayStatusDescription = "Show who is relaying Free Company chat right now.";
     private const string FcScanDescription = "Scan a Free Company's members on the Lodestone. Needs a member's plugin online.";
+    private const string CalendarDescription = "Change or refresh the Free Company calendar. Needs a member's plugin online.";
     private const string WorldOption = "world";
+    private const string ThemeSubcommand = "theme";
+    private const string ThemeOption = "theme";
+    private const string TimeZoneSubcommand = "timezone";
+    private const string TimeZoneOption = "zone";
+    private const string RefreshSubcommand = "refresh";
 
     private readonly Configuration config;
     private readonly IPluginLog log;
@@ -45,6 +53,7 @@ public sealed class SlashCommands
     private readonly FcBranch branch;
     private readonly PresenceCoordinator coordinator;
     private readonly Func<Task<string>> characterLabelProvider;
+    private readonly CalendarService calendar;
 
     public SlashCommands(
         Configuration config,
@@ -52,7 +61,8 @@ public sealed class SlashCommands
         SocketGuild guild,
         FcBranch branch,
         PresenceCoordinator coordinator,
-        Func<Task<string>> characterLabelProvider)
+        Func<Task<string>> characterLabelProvider,
+        CalendarService calendar)
     {
         this.config = config;
         this.log = log;
@@ -60,42 +70,36 @@ public sealed class SlashCommands
         this.branch = branch;
         this.coordinator = coordinator;
         this.characterLabelProvider = characterLabelProvider;
+        this.calendar = calendar;
     }
 
     // --- Registration -------------------------------------------------------------------------
 
     /// <summary>
-    /// Makes sure this branch's server has the two commands. Reads what is registered first and
-    /// only overwrites when it differs: the server owner's per-role grants hang off the command
-    /// ids, and re-registering on every officer's login would churn them for no reason.
+    /// Makes sure this branch's server has our commands. Reads what is registered first and only
+    /// writes the ones that are missing or differ, one by one: writing a command under an existing
+    /// name updates it in place, so its id — and the server owner's per-role grants, which hang
+    /// off it — survive. Commands this version does not know are left alone, so an older plugin
+    /// and a newer one do not take each other's commands away.
     /// </summary>
     public async Task RegisterAsync(CancellationToken ct)
     {
         try
         {
             var existing = await guild.GetApplicationCommandsAsync(options: new RequestOptions { CancelToken = ct });
+            var missing = Commands().Where(c => !IsOurs(existing, c.Name, c.Description)).ToList();
 
-            if (Matches(existing))
+            if (missing.Count == 0)
             {
                 log.Debug("Slash commands are already registered in {Guild}.", guild.Name);
                 return;
             }
 
-            await guild.BulkOverwriteApplicationCommandAsync(
-                [
-                    Build(SetupCodeCommand, SetupCodeDescription),
-                    Build(RelayStatusCommand, RelayStatusDescription),
-                    Build(FcScanCommand, FcScanDescription, b => b.AddOption(new SlashCommandOptionBuilder()
-                        .WithName(WorldOption)
-                        .WithDescription("Home world of the Free Company to scan.")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .WithRequired(true)
-                        .WithAutocomplete(true))),
-                ],
-                new RequestOptions { CancelToken = ct });
+            foreach (var command in missing)
+                await guild.CreateApplicationCommandAsync(command.Build(), new RequestOptions { CancelToken = ct });
 
-            log.Information("Registered the /{Setup}, /{Status} and /{Scan} commands in {Guild}.",
-                SetupCodeCommand, RelayStatusCommand, FcScanCommand, guild.Name);
+            log.Information("Registered {Commands} in {Guild}.",
+                string.Join(", ", missing.Select(c => "/" + c.Name)), guild.Name);
         }
         catch (OperationCanceledException)
         {
@@ -114,6 +118,49 @@ public sealed class SlashCommands
         }
     }
 
+    /// <summary>
+    /// Every command this version registers. The set is the same on every server and for every
+    /// configuration (worlds, themes and zones come from autocomplete, not from registered
+    /// choices). A change to a command's options must come with a change to its description:
+    /// only name and description are compared (see <see cref="IsOurs"/>).
+    /// </summary>
+    private static List<(string Name, string Description, Func<ApplicationCommandProperties> Build)> Commands() =>
+    [
+        (SetupCodeCommand, SetupCodeDescription, () => Build(SetupCodeCommand, SetupCodeDescription)),
+        (RelayStatusCommand, RelayStatusDescription, () => Build(RelayStatusCommand, RelayStatusDescription)),
+        (FcScanCommand, FcScanDescription, () => Build(FcScanCommand, FcScanDescription, b => b.AddOption(new SlashCommandOptionBuilder()
+            .WithName(WorldOption)
+            .WithDescription("Home world of the Free Company to scan.")
+            .WithType(ApplicationCommandOptionType.String)
+            .WithRequired(true)
+            .WithAutocomplete(true)))),
+        (CalendarCommand, CalendarDescription, () => Build(CalendarCommand, CalendarDescription, b => b
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName(ThemeSubcommand)
+                .WithDescription("Set the look of the calendar everyone sees.")
+                .WithType(ApplicationCommandOptionType.SubCommand)
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName(ThemeOption)
+                    .WithDescription("The theme.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .WithRequired(true)
+                    .WithAutocomplete(true)))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName(TimeZoneSubcommand)
+                .WithDescription("Set the time zone that decides which day an event is drawn on.")
+                .WithType(ApplicationCommandOptionType.SubCommand)
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName(TimeZoneOption)
+                    .WithDescription("The time zone.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .WithRequired(true)
+                    .WithAutocomplete(true)))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName(RefreshSubcommand)
+                .WithDescription("Redraw the calendar now, with the latest Apollo events.")
+                .WithType(ApplicationCommandOptionType.SubCommand)))),
+    ];
+
     private static ApplicationCommandProperties Build(
         string name, string description, Action<SlashCommandBuilder>? extra = null)
     {
@@ -129,21 +176,6 @@ public sealed class SlashCommands
 
         extra?.Invoke(builder);
         return builder.Build();
-    }
-
-    /// <summary>
-    /// True when the server already carries exactly our commands. The set is the same on every
-    /// server and for every configuration (the /fcscan worlds come from autocomplete, not from
-    /// registered choices), so two officers with different settings never overwrite each other.
-    /// </summary>
-    private static bool Matches(IReadOnlyCollection<SocketApplicationCommand> existing)
-    {
-        if (existing.Count != 3)
-            return false;
-
-        return IsOurs(existing, SetupCodeCommand, SetupCodeDescription)
-               && IsOurs(existing, RelayStatusCommand, RelayStatusDescription)
-               && IsOurs(existing, FcScanCommand, FcScanDescription);
     }
 
     /// <summary>
@@ -171,7 +203,7 @@ public sealed class SlashCommands
             return;
 
         var name = command.Data.Name;
-        if (name != SetupCodeCommand && name != RelayStatusCommand && name != FcScanCommand)
+        if (name != SetupCodeCommand && name != RelayStatusCommand && name != FcScanCommand && name != CalendarCommand)
             return;
 
         try
@@ -201,6 +233,7 @@ public sealed class SlashCommands
             {
                 SetupCodeCommand => await RunSetupCodeAsync(command, ct),
                 FcScanCommand => await RunFcScanAsync(command, ct),
+                CalendarCommand => await RunCalendarAsync(command, ct),
                 _ => DescribeRelayStatus(),
             };
 
@@ -275,19 +308,37 @@ public sealed class SlashCommands
     /// </summary>
     public async Task HandleAutocompleteAsync(SocketAutocompleteInteraction interaction, CancellationToken ct)
     {
-        if (interaction.GuildId != branch.GuildId || !coordinator.IsLeader || ct.IsCancellationRequested
-            || interaction.Data.CommandName != FcScanCommand)
+        if (interaction.GuildId != branch.GuildId || !coordinator.IsLeader || ct.IsCancellationRequested)
             return;
 
-        // Shown as "FC name @ World", sent back as the Lodestone ID: two Free Companies on one
-        // world stay two distinct choices.
         var typed = interaction.Data.Current.Value?.ToString()?.Trim() ?? string.Empty;
-        var results = ScannableBranches()
-            .Select(b => (Label: $"{b.FcName.Trim()} @ {b.World.Trim()}", Id: b.LodestoneId.ToString()))
+        IEnumerable<(string Label, string Value)> choices;
+
+        if (interaction.Data.CommandName == FcScanCommand)
+        {
+            // Shown as "FC name @ World", sent back as the Lodestone ID: two Free Companies on one
+            // world stay two distinct choices.
+            choices = ScannableBranches()
+                .Select(b => (Label: $"{b.FcName.Trim()} @ {b.World.Trim()}", Value: b.LodestoneId.ToString()))
+                .DistinctBy(c => c.Value);
+        }
+        else if (interaction.Data.CommandName == CalendarCommand && interaction.Data.Current.Name == ThemeOption)
+        {
+            choices = CalendarThemes.All.Select(t => (t.Label, t.Key));
+        }
+        else if (interaction.Data.CommandName == CalendarCommand && interaction.Data.Current.Name == TimeZoneOption)
+        {
+            choices = CalendarTimeZones.All.Select(z => (z.Label, z.Key));
+        }
+        else
+        {
+            return;
+        }
+
+        var results = choices
             .Where(c => c.Label.Contains(typed, StringComparison.OrdinalIgnoreCase))
-            .DistinctBy(c => c.Id)
             .Take(25)
-            .Select(c => new AutocompleteResult(c.Label.Length > 100 ? c.Label[..100] : c.Label, c.Id));
+            .Select(c => new AutocompleteResult(c.Label.Length > 100 ? c.Label[..100] : c.Label, c.Value));
 
         try
         {
@@ -321,6 +372,47 @@ public sealed class SlashCommands
 
         var outcome = await RosterScanner.ScanAsync(guild, matches[0], config, command.User.Mention, log, ct);
         return outcome.Message;
+    }
+
+    // --- /calendar -----------------------------------------------------------------------------
+
+    private async Task<string> RunCalendarAsync(SocketSlashCommand command, CancellationToken ct)
+    {
+        var sub = command.Data.Options.FirstOrDefault();
+        var value = sub?.Options.FirstOrDefault()?.Value?.ToString()?.Trim();
+
+        var (setup, problem) = calendar.Target(command.ChannelId ?? 0);
+        if (setup is null)
+            return problem!;
+
+        switch (sub?.Name)
+        {
+            case ThemeSubcommand:
+            {
+                // A pick from the list is a theme key; typed text without picking may be its label.
+                var theme = CalendarThemes.Find(value)
+                            ?? CalendarThemes.All.FirstOrDefault(t => string.Equals(t.Label, value, StringComparison.OrdinalIgnoreCase));
+                if (theme is null)
+                    return "Unknown theme. Pick one from the list.";
+
+                var outcome = await calendar.UpdateAsync(setup, force: true, s => s with { Theme = theme.Key }, ct);
+                return outcome.Ok ? $"Calendar theme set to {theme.Label}. {outcome.Message}" : outcome.Message;
+            }
+
+            case TimeZoneSubcommand:
+            {
+                var zone = CalendarTimeZones.Find(value)
+                           ?? CalendarTimeZones.All.FirstOrDefault(z => string.Equals(z.Label, value, StringComparison.OrdinalIgnoreCase));
+                if (zone is null)
+                    return "Unknown time zone. Pick one from the list.";
+
+                var outcome = await calendar.UpdateAsync(setup, force: true, s => s with { TimeZone = zone.Key }, ct);
+                return outcome.Ok ? $"Calendar days now follow {zone.Label}. {outcome.Message}" : outcome.Message;
+            }
+
+            default:
+                return (await calendar.UpdateAsync(setup, force: true, change: null, ct)).Message;
+        }
     }
 
     // --- /relaystatus -------------------------------------------------------------------------

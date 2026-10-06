@@ -343,6 +343,26 @@ public static class SharedConfig
             if (b.RosterChannelId != 0 && guild.GetTextChannel(b.RosterChannelId) is null)
                 return $"The roster channel of {Label(b)} was not found, or the bot cannot see it.";
 
+            if (b.CalendarChannelId != 0)
+            {
+                if (guild.GetTextChannel(b.CalendarChannelId) is not { } calendar)
+                    return $"The calendar channel of {Label(b)} was not found, or the bot cannot see it.";
+
+                var calendarPerms = guild.CurrentUser.GetPermissions(calendar);
+                if (!calendarPerms.ViewChannel || !calendarPerms.SendMessages || !calendarPerms.AttachFiles || !calendarPerms.ReadMessageHistory)
+                    return $"The bot needs View Channel, Send Messages, Attach Files and Read Message History in the calendar channel of {Label(b)}.";
+            }
+
+            if (b.ApolloChannelId != 0)
+            {
+                if (guild.GetTextChannel(b.ApolloChannelId) is not { } apollo)
+                    return $"The Apollo channel of {Label(b)} was not found, or the bot cannot see it.";
+
+                var apolloPerms = guild.CurrentUser.GetPermissions(apollo);
+                if (!apolloPerms.ViewChannel || !apolloPerms.ReadMessageHistory)
+                    return $"The bot needs View Channel and Read Message History in the Apollo channel of {Label(b)}.";
+            }
+
             var perms = guild.CurrentUser.GetPermissions(state);
             if (!perms.ViewChannel || !perms.SendMessages || !perms.AttachFiles || !perms.ReadMessageHistory)
                 return $"The bot needs View Channel, Send Messages, Attach Files and Read Message History in the state channel of {Label(b)}.";
