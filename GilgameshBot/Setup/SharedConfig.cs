@@ -405,8 +405,8 @@ public static class SharedConfig
 
         var perms = ApolloReader.PermissionsIn(calendar.Guild, calendar);
         var canSend = calendar is SocketThreadChannel ? perms.SendMessagesInThreads : perms.SendMessages;
-        if (!perms.ViewChannel || !canSend || !perms.AttachFiles || !perms.ReadMessageHistory)
-            return "The bot needs View Channel, Send Messages, Attach Files and Read Message History in the calendar channel.";
+        if (!perms.ViewChannel || !canSend || !perms.EmbedLinks || !perms.AttachFiles || !perms.ReadMessageHistory)
+            return "The bot needs View Channel, Send Messages, Embed Links, Attach Files and Read Message History in the calendar channel.";
 
         foreach (var id in config.ApolloChannelIds.ToList())
         {

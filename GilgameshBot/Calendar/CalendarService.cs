@@ -52,8 +52,8 @@ public sealed class CalendarService
     private const int StrayWindow = 50;
 
     private const string PermissionHint =
-        "The bot needs View Channel, Send Messages (Send Messages in Threads for a thread), Attach Files and Read Message History "
-        + "in the calendar channel (and Pin Messages if the channel was not empty when the calendar was first posted).";
+        "The bot needs View Channel, Send Messages (Send Messages in Threads for a thread), Embed Links, Attach Files and "
+        + "Read Message History in the calendar channel (and Pin Messages if the channel was not empty when the calendar was first posted).";
 
     private readonly Configuration config;
     private readonly IPluginLog log;
@@ -154,7 +154,8 @@ public sealed class CalendarService
 
             var perms = ApolloReader.PermissionsIn(guild, channel);
             var canSend = channel is SocketThreadChannel ? perms.SendMessagesInThreads : perms.SendMessages;
-            if (!perms.ViewChannel || !canSend || !perms.AttachFiles || !perms.ReadMessageHistory)
+            // Without Embed Links Discord silently drops the embed, and the calendar loses its text.
+            if (!perms.ViewChannel || !canSend || !perms.EmbedLinks || !perms.AttachFiles || !perms.ReadMessageHistory)
                 return new CalendarOutcome(false, PermissionHint);
 
             var options = new RequestOptions { CancelToken = ct };
