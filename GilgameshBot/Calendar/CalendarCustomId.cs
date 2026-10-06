@@ -63,15 +63,48 @@ public sealed record CalendarCustomId(CalendarAction Action, int Year, int Month
     }
 }
 
-/// <summary>A calendar's settings: the server theme and the time zone that places events on days.</summary>
-public sealed record CalendarSettings(string Theme, string TimeZone)
+/// <summary>
+/// A calendar's settings: the server theme, the time zone that places events on days, and the
+/// name in its title. All three are kept on the calendar message: theme and zone in its custom
+/// ids, the name as its embed title.
+/// </summary>
+public sealed record CalendarSettings(string Theme, string TimeZone, string Name)
 {
-    public static readonly CalendarSettings Default = new(CalendarThemes.DefaultKey, CalendarTimeZones.DefaultKey);
+    public const string DefaultName = "Free Company calendar";
 
-    /// <summary>The settings carried by the custom ids of a calendar message, or null when it has none.</summary>
-    public static CalendarSettings? FromCustomIds(IEnumerable<string> customIds) =>
-        customIds.Select(c => CalendarCustomId.TryParse(c, out var id) ? id : null)
+    /// <summary>Longest name accepted; Discord allows 256 characters in an embed title.</summary>
+    public const int MaxNameLength = 80;
+
+    /// <summary>Starts the embed title, before the name.</summary>
+    public const string TitlePrefix = "📅 ";
+
+    public static readonly CalendarSettings Default = new(CalendarThemes.DefaultKey, CalendarTimeZones.DefaultKey, DefaultName);
+
+    /// <summary>
+    /// The settings of a calendar message from its custom ids and embed title, or null when it
+    /// carries no calendar custom id.
+    /// </summary>
+    public static CalendarSettings? From(IEnumerable<string> customIds, string? embedTitle)
+    {
+        var id = customIds.Select(c => CalendarCustomId.TryParse(c, out var parsed) ? parsed : null)
             .OfType<CalendarCustomId>()
-            .Select(id => new CalendarSettings(id.Theme, id.TimeZone))
             .FirstOrDefault();
+
+        if (id is null)
+            return null;
+
+        var title = embedTitle ?? string.Empty;
+        return new CalendarSettings(id.Theme, id.TimeZone,
+            NormalizeName(title.StartsWith(TitlePrefix, StringComparison.Ordinal) ? title[TitlePrefix.Length..] : null));
+    }
+
+    /// <summary>One line, trimmed, at most <see cref="MaxNameLength"/> characters; the default when empty.</summary>
+    public static string NormalizeName(string? name)
+    {
+        var line = string.Join(' ', (name ?? string.Empty).Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (line.Length > MaxNameLength)
+            line = line[..(char.IsHighSurrogate(line[MaxNameLength - 1]) ? MaxNameLength - 1 : MaxNameLength)].TrimEnd();
+
+        return line.Length > 0 ? line : DefaultName;
+    }
 }

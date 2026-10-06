@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
+using GilgameshBot.Calendar;
 using GilgameshBot.Relay;
 
 namespace GilgameshBot.Setup;
@@ -402,8 +403,9 @@ public static class SharedConfig
         if (client.GetChannel(config.CalendarChannelId) is not SocketTextChannel calendar)
             return "The calendar channel was not found, or the bot cannot see it.";
 
-        var perms = calendar.Guild.CurrentUser.GetPermissions(calendar);
-        if (!perms.ViewChannel || !perms.SendMessages || !perms.AttachFiles || !perms.ReadMessageHistory)
+        var perms = ApolloReader.PermissionsIn(calendar.Guild, calendar);
+        var canSend = calendar is SocketThreadChannel ? perms.SendMessagesInThreads : perms.SendMessages;
+        if (!perms.ViewChannel || !canSend || !perms.AttachFiles || !perms.ReadMessageHistory)
             return "The bot needs View Channel, Send Messages, Attach Files and Read Message History in the calendar channel.";
 
         foreach (var id in config.ApolloChannelIds.ToList())
@@ -411,7 +413,7 @@ public static class SharedConfig
             if (calendar.Guild.GetTextChannel(id) is not { } apollo)
                 return "An Apollo channel was not found on the calendar's server, or the bot cannot see it.";
 
-            var apolloPerms = calendar.Guild.CurrentUser.GetPermissions(apollo);
+            var apolloPerms = ApolloReader.PermissionsIn(calendar.Guild, apollo);
             if (!apolloPerms.ViewChannel || !apolloPerms.ReadMessageHistory)
                 return $"The bot needs View Channel and Read Message History in #{apollo.Name}.";
         }

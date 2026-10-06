@@ -39,13 +39,15 @@ public sealed class SlashCommands
     private const string SetupCodeDescription = "Get your GilgameshBot setup code as a direct message.";
     private const string RelayStatusDescription = "Show who is relaying Free Company chat right now.";
     private const string FcScanDescription = "Scan a Free Company's members on the Lodestone. Needs a member's plugin online.";
-    private const string CalendarDescription = "Change or refresh the Free Company calendar. Needs a member's plugin online.";
+    private const string CalendarDescription = "Rename, retheme or refresh the Free Company calendar. Needs a member's plugin online.";
     private const string WorldOption = "world";
     private const string ThemeSubcommand = "theme";
     private const string ThemeOption = "theme";
     private const string TimeZoneSubcommand = "timezone";
     private const string TimeZoneOption = "zone";
     private const string RefreshSubcommand = "refresh";
+    private const string NameSubcommand = "name";
+    private const string NameOption = "name";
 
     private readonly Configuration config;
     private readonly IPluginLog log;
@@ -157,6 +159,16 @@ public sealed class SlashCommands
                     .WithRequired(true)
                     .WithAutocomplete(true)))
             .AddOption(new SlashCommandOptionBuilder()
+                .WithName(NameSubcommand)
+                .WithDescription("Set the calendar's title. Leave it empty to go back to \"Free Company calendar\".")
+                .WithType(ApplicationCommandOptionType.SubCommand)
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName(NameOption)
+                    .WithDescription("The title.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .WithRequired(false)
+                    .WithMaxLength(CalendarSettings.MaxNameLength)))
+            .AddOption(new SlashCommandOptionBuilder()
                 .WithName(RefreshSubcommand)
                 .WithDescription("Redraw the calendar now, with the latest Apollo events.")
                 .WithType(ApplicationCommandOptionType.SubCommand)))),
@@ -196,14 +208,17 @@ public sealed class SlashCommands
 
     /// <summary>
     /// Entry point for <see cref="BaseSocketClient.SlashCommandExecuted"/>. Returns without
-    /// touching Discord unless this instance is the one that should answer.
+    /// touching Discord unless this instance is the one that should answer: the leader, or for
+    /// /calendar any connected plugin (the leader may be on a version without the calendar; the
+    /// first to acknowledge answers).
     /// </summary>
     public async Task HandleAsync(SocketSlashCommand command, CancellationToken ct)
     {
-        if (command.GuildId != branch.GuildId || !coordinator.IsLeader || ct.IsCancellationRequested)
+        var name = command.Data.Name;
+        if (command.GuildId != branch.GuildId || ct.IsCancellationRequested
+            || (!coordinator.IsLeader && name != CalendarCommand))
             return;
 
-        var name = command.Data.Name;
         if (name != SetupCodeCommand && name != RelayStatusCommand && name != FcScanCommand && name != CalendarCommand)
             return;
 
@@ -214,7 +229,7 @@ public sealed class SlashCommands
         }
         catch (HttpException ex) when (IsAlreadyAcknowledged(ex))
         {
-            // Two branches on one server: the other branch's leader got there first.
+            // Another plugin got there first: two branches on one server, or /calendar.
             return;
         }
         catch (Exception ex)
@@ -305,11 +320,13 @@ public sealed class SlashCommands
 
     /// <summary>
     /// Entry point for <see cref="BaseSocketClient.AutocompleteExecuted"/>: offers the worlds of
-    /// this server's scannable branches. Answered by the leader only, like the commands.
+    /// this server's scannable branches, and the calendar's themes and time zones. Answered by the
+    /// same plugins as the commands.
     /// </summary>
     public async Task HandleAutocompleteAsync(SocketAutocompleteInteraction interaction, CancellationToken ct)
     {
-        if (interaction.GuildId != branch.GuildId || !coordinator.IsLeader || ct.IsCancellationRequested)
+        if (interaction.GuildId != branch.GuildId || ct.IsCancellationRequested
+            || (!coordinator.IsLeader && interaction.Data.CommandName != CalendarCommand))
             return;
 
         var typed = interaction.Data.Current.Value?.ToString()?.Trim() ?? string.Empty;
@@ -409,6 +426,13 @@ public sealed class SlashCommands
 
                 var outcome = await calendar.UpdateAsync(setup, force: true, s => s with { TimeZone = zone.Key }, ct);
                 return outcome.Ok ? $"Calendar days now follow {zone.Label}. {outcome.Message}" : outcome.Message;
+            }
+
+            case NameSubcommand:
+            {
+                var title = CalendarSettings.NormalizeName(value);
+                var outcome = await calendar.UpdateAsync(setup, force: true, s => s with { Name = title }, ct);
+                return outcome.Ok ? $"Calendar renamed to {MessageFormatter.EscapeMarkdown(title)}. {outcome.Message}" : outcome.Message;
             }
 
             default:

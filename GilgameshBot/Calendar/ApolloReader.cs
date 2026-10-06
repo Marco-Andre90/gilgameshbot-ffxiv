@@ -31,7 +31,7 @@ public static class ApolloReader
                 throw new CalendarSourceException("The Apollo channel was not found, or the bot cannot see it.");
 
             // Without Read Message History Discord answers an empty list, not an error.
-            var perms = guild.CurrentUser.GetPermissions(channel);
+            var perms = PermissionsIn(guild, channel);
             if (!perms.ViewChannel || !perms.ReadMessageHistory)
                 throw new CalendarSourceException("The bot needs View Channel and Read Message History in the Apollo channel.");
 
@@ -54,6 +54,13 @@ public static class ApolloReader
 
         return ApolloParser.ParseAll(posts);
     }
+
+    /// <summary>
+    /// The bot's permissions in <paramref name="channel"/>. A thread has no permission overwrites
+    /// of its own: they are its parent channel's.
+    /// </summary>
+    internal static ChannelPermissions PermissionsIn(SocketGuild guild, SocketTextChannel channel) =>
+        guild.CurrentUser.GetPermissions(channel is SocketThreadChannel { ParentChannel: SocketGuildChannel parent } ? parent : channel);
 
     private static ApolloPost ToPost(IMessage message)
     {

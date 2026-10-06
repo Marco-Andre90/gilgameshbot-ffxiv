@@ -312,8 +312,8 @@ public sealed class DiscordBridge : IDisposable
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
-                // The server's Free Company calendar: refreshed hourly while this plugin leads.
-                s.Calendar = new CalendarService(config, log, guild, coordinator);
+                // The Free Company calendar, when it is on this server: refreshed hourly when due.
+                s.Calendar = new CalendarService(config, log, guild);
                 s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
 
                 // The bot's own slash commands. Registration is a few REST round trips against
@@ -471,7 +471,7 @@ public sealed class DiscordBridge : IDisposable
         return slash.HandleAutocompleteAsync(interaction, s.Cts.Token);
     }
 
-    /// <summary>A button click or menu pick; only the calendar's are answered, by the leader.</summary>
+    /// <summary>A button click or menu pick; only the calendar's are answered, by any connected plugin.</summary>
     private Task OnComponentAsync(Session s, SocketMessageComponent component)
     {
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Calendar is not { } calendar)

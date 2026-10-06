@@ -22,16 +22,18 @@ public sealed record CalendarOutcome(bool Ok, string Message);
 /// configured Apollo channel. It is kept by the plugins connected to the calendar channel's server.
 /// </para>
 /// <para>
-/// Every leader on the server runs the hourly loop, and nobody coordinates: before writing, a
-/// plugin reads the calendar message and leaves it alone when the bot edited it within the last
+/// Every connected plugin on the server runs the hourly loop (not only the relaying one: a member
+/// on an older version may be relaying), and nobody coordinates: before writing, a plugin reads
+/// the calendar message and leaves it alone when the bot edited it within the last
 /// <see cref="FreshFor"/>. Two plugins that still write at the same moment write the same thing
 /// (the picture is seeded by month and theme), and a duplicate message is deleted by the next pass.
 /// </para>
 /// <para>
-/// The calendar message is the bot's message that starts with <see cref="CalendarMessage.Marker"/>:
-/// the channel's first message when the channel was empty, pinned otherwise — so members can
-/// talk in the channel without pushing it out of reach. Its buttons carry the calendar's settings
-/// (see <see cref="CalendarCustomId"/>).
+/// The calendar message is the bot's message whose buttons carry calendar custom ids: the
+/// channel's first message when the channel was empty, pinned otherwise — so members can talk in
+/// the channel without pushing it out of reach. It holds the calendar's settings
+/// (see <see cref="CalendarSettings"/>). The channel may be a thread; an archived one is reopened
+/// before the calendar is written.
 /// </para>
 /// <para>
 /// A calendar is never written from bad input: an Apollo channel that cannot be read leaves the
@@ -50,22 +52,20 @@ public sealed class CalendarService
     private const int StrayWindow = 50;
 
     private const string PermissionHint =
-        "The bot needs View Channel, Send Messages, Attach Files and Read Message History in the calendar channel "
-        + "(and Pin Messages if the channel was not empty when the calendar was first posted).";
+        "The bot needs View Channel, Send Messages (Send Messages in Threads for a thread), Attach Files and Read Message History "
+        + "in the calendar channel (and Pin Messages if the channel was not empty when the calendar was first posted).";
 
     private readonly Configuration config;
     private readonly IPluginLog log;
     private readonly SocketGuild guild;
-    private readonly PresenceCoordinator coordinator;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<ulong, (DateTimeOffset At, List<CalendarEvent> Events)> cache = new();
 
-    public CalendarService(Configuration config, IPluginLog log, SocketGuild guild, PresenceCoordinator coordinator)
+    public CalendarService(Configuration config, IPluginLog log, SocketGuild guild)
     {
         this.config = config;
         this.log = log;
         this.guild = guild;
-        this.coordinator = coordinator;
     }
 
     /// <summary>The calendar: its channel and the Apollo channels it reads.</summary>
@@ -85,24 +85,21 @@ public sealed class CalendarService
 
     // --- Hourly loop ----------------------------------------------------------------------------
 
-    /// <summary>Refreshes this server's calendars shortly after connecting, then every hour, while this plugin leads.</summary>
+    /// <summary>Refreshes the calendar shortly after connecting, then every hour, when it is due.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
         try
         {
-            // Give the presence queue time to settle on a leader first.
-            await Task.Delay(TimeSpan.FromSeconds(45 + Random.Shared.Next(45)), ct);
+            // Spread over a minute or two, so plugins connecting together rarely meet.
+            await Task.Delay(TimeSpan.FromSeconds(45 + Random.Shared.Next(90)), ct);
 
             while (!ct.IsCancellationRequested)
             {
-                if (coordinator.IsLeader)
+                if (Current() is { } setup)
                 {
-                    if (Current() is { } setup)
-                    {
-                        var outcome = await UpdateAsync(setup, force: false, change: null, ct);
-                        if (!outcome.Ok)
-                            log.Warning("Calendar: {Message}", outcome.Message);
-                    }
+                    var outcome = await UpdateAsync(setup, force: false, change: null, ct);
+                    if (!outcome.Ok)
+                        log.Warning("Calendar: {Message}", outcome.Message);
                 }
 
                 await Task.Delay(UntilNextHour(), ct);
@@ -155,18 +152,22 @@ public sealed class CalendarService
             if (guild.GetTextChannel(setup.ChannelId) is not { } channel)
                 return new CalendarOutcome(false, "The calendar channel was not found, or the bot cannot see it.");
 
-            var perms = guild.CurrentUser.GetPermissions(channel);
-            if (!perms.ViewChannel || !perms.SendMessages || !perms.AttachFiles || !perms.ReadMessageHistory)
+            var perms = ApolloReader.PermissionsIn(guild, channel);
+            var canSend = channel is SocketThreadChannel ? perms.SendMessagesInThreads : perms.SendMessages;
+            if (!perms.ViewChannel || !canSend || !perms.AttachFiles || !perms.ReadMessageHistory)
                 return new CalendarOutcome(false, PermissionHint);
 
             var options = new RequestOptions { CancelToken = ct };
+
+            // Messages in an archived thread cannot be edited until it is reopened.
+            if (channel is SocketThreadChannel { IsArchived: true } thread)
+                await thread.ModifyAsync(p => p.Archived = false, options);
+
             var found = await FindAsync(channel, options);
 
             // A calendar that was unpinned is no longer found, but its copy still holds the settings.
             var holder = found.Message ?? found.Strays.OrderByDescending(m => m.Id).FirstOrDefault();
-            var stored = holder is not null
-                ? CalendarSettings.FromCustomIds(ApolloReader.CustomIds(holder.Components))
-                : null;
+            var stored = holder is not null ? ReadSettings(holder) : null;
             var settings = stored ?? CalendarSettings.Default;
             if (change is not null)
             {
@@ -200,15 +201,15 @@ public sealed class CalendarService
             var today = CalendarPage.LocalDay(now, tz);
 
             var image = Draw(events, zone, tz, settings.Theme, today.Year, today.Month, now);
-            var text = CalendarMessage.ChannelText(events, guild.Id, zone, fallback, now);
+            var embed = CalendarMessage.ChannelEmbed(events, guild.Id, settings, zone, fallback, now);
             var controls = CalendarMessage.Controls(today.Year, today.Month, settings.Theme, zone.Key, today, events, tz);
 
             using (var file = new FileAttachment(new MemoryStream(image.Bytes), image.FileName))
             {
                 if (found.Message is null)
                 {
-                    var sent = await channel.SendFileAsync(file, text, allowedMentions: AllowedMentions.None,
-                        components: controls, options: options);
+                    var sent = await channel.SendFileAsync(file, text: null, embed: embed,
+                        allowedMentions: AllowedMentions.None, components: controls, options: options);
 
                     if (!found.ChannelWasEmpty && await PinOrTakeBackAsync(sent, options) is { } problem)
                         return problem;
@@ -217,7 +218,8 @@ public sealed class CalendarService
                 {
                     await found.Message.ModifyAsync(p =>
                     {
-                        p.Content = text;
+                        p.Content = string.Empty;
+                        p.Embeds = new[] { embed };
                         p.Attachments = new Optional<IEnumerable<FileAttachment>>([file]);
                         p.Components = controls;
                         p.AllowedMentions = AllowedMentions.None;
@@ -291,6 +293,10 @@ public sealed class CalendarService
         }
     }
 
+    /// <summary>The settings kept on a calendar message, or null when it carries none.</summary>
+    private static CalendarSettings? ReadSettings(IMessage message) =>
+        CalendarSettings.From(ApolloReader.CustomIds(message.Components), message.Embeds.FirstOrDefault()?.Title);
+
     private sealed record Found(IUserMessage? Message, bool ChannelWasEmpty, List<IMessage> Strays);
 
     /// <summary>
@@ -300,7 +306,8 @@ public sealed class CalendarService
     private async Task<Found> FindAsync(SocketTextChannel channel, RequestOptions options)
     {
         var botId = guild.CurrentUser.Id;
-        bool IsCalendar(IMessage m) => m.Author.Id == botId && m.Content.StartsWith(CalendarMessage.Marker, StringComparison.Ordinal);
+        bool IsCalendar(IMessage m) => m.Author.Id == botId
+                                       && ApolloReader.CustomIds(m.Components).Any(c => c.StartsWith(CalendarCustomId.Prefix, StringComparison.Ordinal));
 
         var pinned = (await channel.GetPinnedMessagesAsync(options)).Where(IsCalendar).OrderBy(m => m.Id).ToList();
         var message = pinned.OfType<IUserMessage>().FirstOrDefault();
@@ -325,11 +332,13 @@ public sealed class CalendarService
 
     /// <summary>
     /// Entry point for button clicks and menu picks. Returns without touching Discord unless the
-    /// control is a calendar's and this plugin leads; acknowledges, then works off the gateway task.
+    /// control is the calendar's; acknowledges, then works off the gateway task. Every connected
+    /// plugin on the server tries, and the first to acknowledge answers: the relaying member may be
+    /// on a version without the calendar.
     /// </summary>
     public async Task HandleComponentAsync(SocketMessageComponent component, CancellationToken ct)
     {
-        if (component.GuildId != guild.Id || !coordinator.IsLeader || ct.IsCancellationRequested
+        if (component.GuildId != guild.Id || ct.IsCancellationRequested
             || !CalendarCustomId.TryParse(component.Data.CustomId, out var id))
             return;
 
@@ -360,7 +369,7 @@ public sealed class CalendarService
         }
         catch (HttpException ex) when (IsAlreadyAcknowledged(ex))
         {
-            // Two branches on one server: the other branch's leader got there first.
+            // Another member's plugin got there first.
             return;
         }
         catch (Exception ex)
@@ -420,13 +429,14 @@ public sealed class CalendarService
                 month = current.AddMonths(CalendarMessage.MonthRange);
 
             var image = Draw(events, zone, tz, theme, month.Year, month.Month, now);
-            var reply = CalendarMessage.MonthText(events, guild.Id, month.Year, month.Month, theme, zone, tz, fallback);
+            var reply = CalendarMessage.MonthEmbed(events, guild.Id, month.Year, month.Month, theme, zone, tz, fallback);
             var controls = CalendarMessage.Controls(month.Year, month.Month, theme, zone.Key, today, events, tz);
 
             using var file = new FileAttachment(new MemoryStream(image.Bytes), image.FileName);
             await component.ModifyOriginalResponseAsync(p =>
             {
-                p.Content = reply;
+                p.Content = string.Empty;
+                p.Embeds = new[] { reply };
                 p.Attachments = new Optional<IEnumerable<FileAttachment>>([file]);
                 p.Components = controls;
                 p.AllowedMentions = AllowedMentions.None;
@@ -438,7 +448,7 @@ public sealed class CalendarService
         }
         catch (HttpException ex) when (IsAlreadyAcknowledged(ex))
         {
-            // Harmless duplicate from a second leader on the same server.
+            // Harmless duplicate from another member's plugin.
         }
         catch (Exception ex)
         {

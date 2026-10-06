@@ -11,29 +11,37 @@ namespace GilgameshBot.Calendar;
 /// replies only the member who clicked sees.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The text goes in an embed, so the picture comes first: Discord shows a message's attached
+/// files above its embeds.
+/// </para>
+/// <para>
 /// Times are only ever written as Discord timestamps (<c>&lt;t:…&gt;</c>), which every member's
 /// client shows in their own time zone. The picture cannot do that, so it shows no times at all:
 /// it only places events on days, in the calendar's time zone, which the text names.
+/// </para>
 /// </remarks>
 public static class CalendarMessage
 {
-    /// <summary>Starts the channel message's text; with the bot as author, it identifies the calendar message.</summary>
-    public const string Marker = "📅 **Free Company calendar";
-
     /// <summary>How many upcoming events the channel message lists.</summary>
     private const int UpcomingCount = 8;
+
+    /// <summary>Discord's limit for an embed description, less some room.</summary>
+    private const int MaxDescription = 4000;
 
     /// <summary>Months a member can browse away from the current one, each way.</summary>
     public const int MonthRange = 1;
 
+    private static readonly Color Accent = new(0xC0, 0x58, 0x1A);
+
     // --- Text -----------------------------------------------------------------------------------
 
-    /// <summary>The channel message: what is coming up, and how to read the picture.</summary>
-    public static string ChannelText(
-        IReadOnlyList<CalendarEvent> events, ulong guildId, CalendarTimeZone zone, bool zoneFallback, DateTimeOffset now)
+    /// <summary>The channel message: the calendar's name, what is coming up, and how to read the picture.</summary>
+    public static Embed ChannelEmbed(
+        IReadOnlyList<CalendarEvent> events, ulong guildId, CalendarSettings settings, CalendarTimeZone zone, bool zoneFallback,
+        DateTimeOffset now)
     {
         var text = new StringBuilder();
-        text.Append($"{Marker}**\n");
 
         var upcoming = events
             .Where(e => (e.End ?? e.Start) >= now)
@@ -43,41 +51,50 @@ public static class CalendarMessage
 
         if (upcoming.Count == 0)
         {
-            text.Append("No upcoming events. Events created with Apollo show up here.\n");
+            text.Append("No upcoming events. Events created with Apollo show up here.");
         }
         else
         {
             text.Append("**Next events**\n");
             foreach (var e in upcoming)
                 text.Append(Line(e, guildId)).Append('\n');
+            text.Append("Sign up on the event posts.");
         }
 
-        text.Append(Footer(zone, zoneFallback, now));
-        return Fit(text.ToString());
+        return new EmbedBuilder()
+            .WithTitle(CalendarSettings.TitlePrefix + settings.Name)
+            .WithDescription(Fit(text.ToString()))
+            .WithColor(Accent)
+            .WithFooter(Footer(zone, zoneFallback) + " · Updated")
+            .WithTimestamp(now)
+            .Build();
     }
 
     /// <summary>A reply showing <paramref name="year"/>/<paramref name="month"/>: its events and the theme it is drawn in.</summary>
-    public static string MonthText(
+    public static Embed MonthEmbed(
         IReadOnlyList<CalendarEvent> events, ulong guildId, int year, int month, string themeKey,
         CalendarTimeZone zone, TimeZoneInfo tz, bool zoneFallback)
     {
         var theme = CalendarThemes.Find(CalendarThemes.Resolve(themeKey, month))?.Label ?? "Clean";
-        var text = new StringBuilder();
-        text.Append($"📅 **{CalendarRenderer.MonthName(month)} {year}** · {theme}\n");
 
         var inMonth = events
             .Where(e => CalendarPage.LocalDay(e.Start, tz) is var d && d.Year == year && d.Month == month)
             .OrderBy(e => e.Start)
             .ToList();
 
+        var text = new StringBuilder();
         if (inMonth.Count == 0)
-            text.Append("No events this month.\n");
+            text.Append("No events this month.");
 
         foreach (var e in inMonth)
             text.Append(Line(e, guildId)).Append('\n');
 
-        text.Append(Footer(zone, zoneFallback, now: null));
-        return Fit(text.ToString());
+        return new EmbedBuilder()
+            .WithTitle($"{CalendarSettings.TitlePrefix}{CalendarRenderer.MonthName(month)} {year} · {theme}")
+            .WithDescription(Fit(text.ToString().TrimEnd('\n')))
+            .WithColor(Accent)
+            .WithFooter(Footer(zone, zoneFallback))
+            .Build();
     }
 
     /// <summary>The reply to Day details: every event of that day.</summary>
@@ -98,7 +115,8 @@ public static class CalendarMessage
             text.Append('\n');
         }
 
-        return Fit(text.ToString());
+        var result = text.ToString();
+        return result.Length <= MessageFormatter.MaxLength ? result : result[..(MessageFormatter.MaxLength - 1)] + "…";
     }
 
     /// <summary>"• [Title](link to the Apollo post) — when · in how long".</summary>
@@ -107,27 +125,27 @@ public static class CalendarMessage
         var title = MessageFormatter.NeutraliseMassMentions(MessageFormatter.EscapeMarkdown(e.Title));
         var start = e.Start.ToUnixTimeSeconds();
         var link = $"https://discord.com/channels/{guildId}/{e.ChannelId}/{e.MessageId}";
-        return $"• [{title}](<{link}>) — <t:{start}:F> · <t:{start}:R>";
+        return $"• [{title}]({link}) — <t:{start}:F> · <t:{start}:R>";
     }
 
-    private static string Footer(CalendarTimeZone zone, bool zoneFallback, DateTimeOffset? now)
+    /// <summary>Footers show plain text only: no markdown, no timestamps.</summary>
+    private static string Footer(CalendarTimeZone zone, bool zoneFallback)
     {
         var where = zoneFallback ? "UTC (this computer does not know " + zone.Label + ")" : zone.Label;
-        var updated = now is { } n ? $" · updated <t:{n.ToUnixTimeSeconds()}:R>" : string.Empty;
-        return $"-# Days on the picture follow {where} time; the times above are in yours. Sign up on the event posts{updated}.";
+        return $"Days on the picture follow {where} time; the times above are in yours";
     }
 
-    /// <summary>Cuts whole lines off the middle so the footer always stays.</summary>
+    /// <summary>Cuts whole lines off the end so the description stays within Discord's limit.</summary>
     private static string Fit(string text)
     {
-        if (text.Length <= MessageFormatter.MaxLength)
+        if (text.Length <= MaxDescription)
             return text;
 
         var lines = text.Split('\n').ToList();
-        while (lines.Count > 2 && string.Join('\n', lines).Length > MessageFormatter.MaxLength - 2)
-            lines.RemoveAt(lines.Count - 2);
+        while (lines.Count > 1 && string.Join('\n', lines).Length > MaxDescription - 2)
+            lines.RemoveAt(lines.Count - 1);
 
-        return string.Join('\n', lines.Take(lines.Count - 1).Append("…").Append(lines[^1]));
+        return string.Join('\n', lines.Append("…"));
     }
 
     // --- Controls -------------------------------------------------------------------------------
