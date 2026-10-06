@@ -76,10 +76,10 @@ public sealed class ConfigWindow : Window, IDisposable
     private Task<(bool Ok, string World, string Tag, string FcName, ulong FcId)>? fcIdProbe;
     private Task<RosterOutcome>? rosterScan;
 
-    // Calendar tab: which branch the editor shows (-1: none), its edit buffers, and the update job.
-    private int calendarBranch = -1;
+    // Calendar tab: its edit buffers (filled from the config on first draw, after a save and after a sync) and the update job.
+    private bool calendarBuffersLoaded;
     private string calendarChannelIdBuffer = string.Empty;
-    private string apolloChannelIdBuffer = string.Empty;
+    private string apolloChannelIdsBuffer = string.Empty;
     private string? calendarMessage;
     private bool calendarMessageIsWarning;
     private Task<CalendarOutcome>? calendarUpdate;
@@ -948,7 +948,7 @@ public sealed class ConfigWindow : Window, IDisposable
         tokenBuffer = config.BotToken;
         ClearBranchEditor();
         rosterBranch = -1;
-        calendarBranch = -1;
+        calendarBuffersLoaded = false;
     }
 
     // --- FC roster tab ----------------------------------------------------------------------
@@ -1219,135 +1219,75 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiHelpers.ScaledDummy(4);
 
         TextWrappedColoured(Grey,
-            "Keeps a month calendar in a Discord channel, with the events created with Apollo. The bot redraws it "
-            + "every hour while a member's plugin is connected; members browse months, pick a day or try another "
-            + "theme with its buttons. Officers change it with /calendar in Discord.");
+            "Keeps one month calendar in a Discord channel with the events every branch creates with Apollo. "
+            + "The bot redraws it every hour while a member's plugin is connected; members browse months, pick a "
+            + "day or try another theme with its buttons. Officers change it with /calendar in Discord.");
         ImGuiHelpers.ScaledDummy(6);
 
-        SectionHeader("Free Companies");
+        SectionHeader("Channels");
 
-        if (config.Branches.Count == 0)
+        if (!calendarBuffersLoaded)
         {
-            TextColoured(Grey, "No branches yet. Add them on the Discord tab, or import a setup code.");
-            return;
+            calendarChannelIdBuffer = config.CalendarChannelId == 0 ? string.Empty : config.CalendarChannelId.ToString();
+            apolloChannelIdsBuffer = string.Join(", ", config.ApolloChannelIds);
+            calendarBuffersLoaded = true;
         }
-
-        // The branch list can shrink under us (removed on the Discord tab).
-        if (calendarBranch >= config.Branches.Count)
-            calendarBranch = -1;
-
-        using (var table = ImRaii.Table("##calendarBranches", 3,
-                   ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
-        {
-            if (table)
-            {
-                ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f);
-                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthStretch, 3f);
-                ImGui.TableSetupColumn("Calendar", ImGuiTableColumnFlags.WidthStretch, 3f);
-                ImGui.TableHeadersRow();
-
-                for (var i = 0; i < config.Branches.Count; i++)
-                {
-                    var branch = config.Branches[i];
-                    ImGui.TableNextRow();
-
-                    ImGui.TableNextColumn();
-                    if (ImGui.Selectable($"{(branch.Name.Length > 0 ? branch.Name : "(unnamed)")}##calendar{i}",
-                            calendarBranch == i, ImGuiSelectableFlags.SpanAllColumns))
-                        SelectCalendarBranch(i);
-
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(branch.World);
-
-                    ImGui.TableNextColumn();
-                    TextColoured(branch.IsCalendarConfigured ? Green : Grey,
-                        branch.IsCalendarConfigured ? "set up" : "not set up");
-                }
-            }
-        }
-
-        if (calendarBranch < 0)
-        {
-            ImGuiHelpers.ScaledDummy(4);
-            TextColoured(Grey, "Select a Free Company to set up its calendar.");
-            DrawCalendarMessage();
-            return;
-        }
-
-        var selected = config.Branches[calendarBranch];
-
-        SectionGap();
-        SectionHeader($"Calendar settings — {selected.Name}");
 
         ImGui.InputText("Calendar channel ID", ref calendarChannelIdBuffer, 32);
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Where the bot keeps the calendar. Branches on one server that use the same channel share one calendar. "
-            + "Use a new, empty channel: the calendar then stays on top. In a channel that already has messages "
-            + "the bot pins it instead, which needs Pin Messages. It must not be a relay, state or roster channel.");
+            "Where the bot keeps the calendar. Use a new, empty channel: the calendar then stays on top. In a channel "
+            + "that already has messages the bot pins it instead, which needs Pin Messages. It must not be a relay, "
+            + "state or roster channel.");
 
-        ImGui.InputText("Apollo channel ID", ref apolloChannelIdBuffer, 32);
+        ImGui.InputText("Apollo channel IDs", ref apolloChannelIdsBuffer, 256);
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "The channel where Apollo posts this Free Company's events. The bot only reads it: it needs View Channel "
-            + "and Read Message History there, and the Message Content intent switched on in the Discord Developer Portal.");
+            "The channels where Apollo posts the Free Company's events, separated by commas (up to 10), on the same "
+            + "server as the calendar. The bot only reads them: it needs View Channel and Read Message History there, "
+            + "and the Message Content intent switched on in the Discord Developer Portal.");
 
         ImGuiHelpers.ScaledDummy(4);
 
         if (ImGui.Button("Save calendar settings", ImGuiHelpers.ScaledVector2(180, 0)))
-            SaveCalendarSettings(selected);
+            SaveCalendarSettings();
 
         SectionGap();
         SectionHeader("Update");
 
-        var canUpdate = calendarUpdate is null && selected.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
+        var canUpdate = calendarUpdate is null && config.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
         using (ImRaii.Disabled(!canUpdate))
         {
             if (ImGui.Button(calendarUpdate is null ? "Update now" : "Updating…", ImGuiHelpers.ScaledVector2(140, 0)))
             {
                 // Off the draw thread: the update ends in drawing and encoding an image.
-                calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync(selected));
+                calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync());
                 calendarMessage = null;
             }
         }
 
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Reads the Apollo channel and redraws the calendar now, instead of waiting for the hourly update. "
+            "Reads the Apollo channels and redraws the calendar now, instead of waiting for the hourly update. "
             + "Posts it the first time. Needs the plugin connected.");
 
-        if (!selected.IsCalendarConfigured)
-            TextColoured(Grey, "Save a calendar channel and an Apollo channel first.");
+        if (!config.IsCalendarConfigured)
+            TextColoured(Grey, "Save a calendar channel and at least one Apollo channel first.");
         else if (!plugin.Bridge.CanUpdateCalendar)
             TextColoured(Grey, "Connect first.");
 
-        DrawCalendarMessage();
+        if (calendarMessage is { } msg)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextWrappedColoured(calendarMessageIsWarning ? Yellow : Green, msg);
+        }
     }
 
-    private void DrawCalendarMessage()
-    {
-        if (calendarMessage is not { } msg)
-            return;
-
-        ImGuiHelpers.ScaledDummy(4);
-        TextWrappedColoured(calendarMessageIsWarning ? Yellow : Green, msg);
-    }
-
-    private void SelectCalendarBranch(int index)
-    {
-        calendarBranch = index;
-        calendarMessage = null;
-
-        var branch = config.Branches[index];
-        calendarChannelIdBuffer = branch.CalendarChannelId == 0 ? string.Empty : branch.CalendarChannelId.ToString();
-        apolloChannelIdBuffer = branch.ApolloChannelId == 0 ? string.Empty : branch.ApolloChannelId.ToString();
-    }
-
-    private void SaveCalendarSettings(FcBranch branch)
+    private void SaveCalendarSettings()
     {
         calendarMessageIsWarning = true;
 
-        // Empty fields turn the calendar off for this branch.
+        // Empty fields turn the calendar off.
         ulong calendarChannelId = 0;
         if (calendarChannelIdBuffer.Trim().Length > 0 && !ulong.TryParse(calendarChannelIdBuffer.Trim(), out calendarChannelId))
         {
@@ -1355,10 +1295,9 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        ulong apolloChannelId = 0;
-        if (apolloChannelIdBuffer.Trim().Length > 0 && !ulong.TryParse(apolloChannelIdBuffer.Trim(), out apolloChannelId))
+        if (Configuration.ParseChannelList(apolloChannelIdsBuffer) is not { } apolloChannelIds)
         {
-            calendarMessage = "Apollo channel ID must be a number.";
+            calendarMessage = "Apollo channel IDs must be numbers separated by commas, at most 10.";
             return;
         }
 
@@ -1369,20 +1308,21 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        if (calendarChannelId != 0 && calendarChannelId == apolloChannelId)
+        if (calendarChannelId != 0 && apolloChannelIds.Contains(calendarChannelId))
         {
-            calendarMessage = "The calendar channel must be a different channel from the Apollo channel.";
+            calendarMessage = "The calendar channel must not be one of the Apollo channels.";
             return;
         }
 
-        branch.CalendarChannelId = calendarChannelId;
-        branch.ApolloChannelId = apolloChannelId;
+        config.CalendarChannelId = calendarChannelId;
+        config.ApolloChannelIds = apolloChannelIds; // replaced, never mutated: background tasks read it
         config.Save();
+        calendarBuffersLoaded = false;
 
-        calendarMessage = branch.IsCalendarConfigured
+        calendarMessage = config.IsCalendarConfigured
             ? "Saved. Publish it (Advanced tab) to share it."
-            : "Saved. The calendar stays off until both channels are filled in.";
-        calendarMessageIsWarning = !branch.IsCalendarConfigured;
+            : "Saved. The calendar stays off until the calendar channel and an Apollo channel are filled in.";
+        calendarMessageIsWarning = !config.IsCalendarConfigured;
     }
 
     /// <summary>Picks up a finished "Update now". Called once per frame.</summary>

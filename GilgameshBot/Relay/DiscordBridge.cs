@@ -607,22 +607,22 @@ public sealed class DiscordBridge : IDisposable
     /// <summary>True when a calendar can be updated from the settings window: the bot is connected.</summary>
     public bool CanUpdateCalendar => State == BridgeState.Connected && session?.Calendar is not null;
 
-    /// <summary>Redraws the calendar of <paramref name="branch"/> now, from the settings window.</summary>
-    public async Task<CalendarOutcome> UpdateCalendarAsync(FcBranch branch)
+    /// <summary>Redraws the calendar now, from the settings window.</summary>
+    public async Task<CalendarOutcome> UpdateCalendarAsync()
     {
         var s = session;
         if (s?.Calendar is not { } calendar || State != BridgeState.Connected)
             return new CalendarOutcome(false, "Connect first.");
 
-        if (s.Guild is not { } guild || branch.GuildId != guild.Id)
-            return new CalendarOutcome(false,
-                "This calendar is on another Discord server. Connect with a character from a branch on that server.");
+        if (!config.IsCalendarConfigured)
+            return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
 
         // Read before the first await: a teardown in between disposes the token source.
         var ct = s.Cts.Token;
-        var setup = calendar.Calendars().FirstOrDefault(c => c.ChannelId == branch.CalendarChannelId);
-        if (setup is null)
-            return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
+        if (calendar.Current() is not { } setup)
+            return new CalendarOutcome(false,
+                "The calendar channel is not on this branch's Discord server, or the bot cannot see it. "
+                + "Connect with a character from a branch on the calendar's server.");
 
         return await calendar.UpdateAsync(setup, force: true, change: null, ct);
     }

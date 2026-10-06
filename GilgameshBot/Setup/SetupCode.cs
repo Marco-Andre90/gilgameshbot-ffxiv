@@ -32,23 +32,12 @@ public sealed class SetupBranch
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PromotionDays { get; set; }
 
-    // Calendar. Optional like the roster fields.
-    [JsonPropertyName("calendar")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Calendar { get; set; }
-
-    [JsonPropertyName("apollo")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Apollo { get; set; }
-
     // Parsed IDs, filled in by TryDecode once validated.
     [JsonIgnore] public ulong GuildId { get; set; }
     [JsonIgnore] public ulong ChannelId { get; set; }
     [JsonIgnore] public ulong StateChannelId { get; set; }
     [JsonIgnore] public ulong LodestoneId { get; set; }
     [JsonIgnore] public ulong RosterChannelId { get; set; }
-    [JsonIgnore] public ulong CalendarChannelId { get; set; }
-    [JsonIgnore] public ulong ApolloChannelId { get; set; }
 }
 
 /// <summary>
@@ -95,6 +84,23 @@ public sealed class SetupPayload
     [JsonPropertyName("receipt")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SetupReceipt? Receipt { get; set; }
+
+    /// <summary>
+    /// The calendar channel. Optional: absent on codes from older plugins and when there is no
+    /// calendar, and then an import keeps the local calendar settings.
+    /// </summary>
+    [JsonPropertyName("calendarChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CalendarChannel { get; set; }
+
+    /// <summary>The Apollo channels, comma-separated. Optional, with <see cref="CalendarChannel"/>.</summary>
+    [JsonPropertyName("apolloChannels")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ApolloChannels { get; set; }
+
+    // Parsed IDs, filled in by TryDecode once validated.
+    [JsonIgnore] public ulong CalendarChannelId { get; set; }
+    [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
 }
 
 /// <summary>
@@ -141,6 +147,8 @@ public static class SetupCode
             Branches = ToSetupBranches(config.Branches),
             Revision = config.SharedRevision > 0 ? config.SharedRevision : null,
             Receipt = receipt,
+            CalendarChannel = FormatCalendar(config).Channel,
+            ApolloChannels = FormatCalendar(config).Apollo,
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -164,8 +172,6 @@ public static class SetupCode
                 StarterRank = b.StarterRank.Trim() is { Length: > 0 } rank ? rank : null,
                 Roster = b.RosterChannelId != 0 ? b.RosterChannelId.ToString() : null,
                 PromotionDays = Math.Clamp(b.PromotionDays, 1, 365),
-                Calendar = b.CalendarChannelId != 0 ? b.CalendarChannelId.ToString() : null,
-                Apollo = b.ApolloChannelId != 0 ? b.ApolloChannelId.ToString() : null,
             })
             .ToList();
 
@@ -258,6 +264,14 @@ public static class SetupCode
         if (parsed.Revision is <= 0)
             parsed.Revision = null;
 
+        // Like the roster fields, a bad calendar setting is dropped rather than failing the import.
+        if (parsed.CalendarChannel is not null)
+        {
+            (parsed.CalendarChannelId, parsed.ApolloChannelIds) = ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
+            if (parsed.CalendarChannelId == 0)
+                parsed.CalendarChannel = null;
+        }
+
         payload = parsed;
         return true;
     }
@@ -318,8 +332,6 @@ public static class SetupCode
             branch.RosterChannelId = ulong.TryParse(branch.Roster, out var rosterId) ? rosterId : 0;
             branch.StarterRank = branch.StarterRank?.Trim() is { Length: > 0 and <= 32 } rank ? rank : null;
             branch.PromotionDays = branch.PromotionDays is >= 1 and <= 365 ? branch.PromotionDays : null;
-            branch.CalendarChannelId = ulong.TryParse(branch.Calendar, out var calendarId) ? calendarId : 0;
-            branch.ApolloChannelId = ulong.TryParse(branch.Apollo, out var apolloId) ? apolloId : 0;
         }
 
         // A roster channel shared with any branch's relay or state channel would let the roster
@@ -327,12 +339,6 @@ public static class SetupCode
         var busyChannels = branches.SelectMany(b => new[] { b.ChannelId, b.StateChannelId }).ToHashSet();
         foreach (var branch in branches.Where(b => busyChannels.Contains(b.RosterChannelId)))
             branch.RosterChannelId = 0;
-
-        // The calendar update edits and deletes the bot's messages in its channel too, so a
-        // calendar channel may be none of the others. On a clash the calendar is the one dropped.
-        busyChannels.UnionWith(branches.Select(b => b.RosterChannelId).Where(id => id != 0));
-        foreach (var branch in branches.Where(b => busyChannels.Contains(b.CalendarChannelId)))
-            branch.CalendarChannelId = 0;
 
         return true;
     }
@@ -345,6 +351,12 @@ public static class SetupCode
     {
         config.BotToken = payload.Token;
         ApplyBranches(payload.Branches, payload.Heartbeat, payload.Stale, config);
+
+        if (payload.CalendarChannel is not null)
+        {
+            config.CalendarChannelId = payload.CalendarChannelId;
+            config.ApolloChannelIds = payload.ApolloChannelIds;
+        }
 
         // The code's revision, or 0 when it carries none: the next sync then brings in whatever
         // the state channels hold, so a code older than the shared configuration heals itself.
@@ -388,12 +400,33 @@ public static class SetupCode
                 StarterRank = b.StarterRank ?? "Member",
                 PromotionDays = b.PromotionDays ?? 30,
                 RosterChannelId = b.RosterChannelId,
-                CalendarChannelId = b.CalendarChannelId,
-                ApolloChannelId = b.ApolloChannelId,
             })
             .ToList();
         config.HeartbeatSeconds = heartbeat;
         config.StaleSeconds = stale;
+    }
+
+    /// <summary>The calendar settings as they travel in a setup code or the shared configuration; nulls when there is no calendar.</summary>
+    internal static (string? Channel, string? Apollo) FormatCalendar(Configuration config) =>
+        config.IsCalendarConfigured
+            ? (config.CalendarChannelId.ToString(), string.Join(",", config.ApolloChannelIds))
+            : (null, null);
+
+    /// <summary>
+    /// The calendar settings from a setup code or the shared configuration; (0, []) when they are
+    /// missing or malformed. The calendar update edits and deletes the bot's messages in its
+    /// channel, so a calendar channel that is any branch's relay, state or roster channel, or one
+    /// of the Apollo channels, is dropped.
+    /// </summary>
+    internal static (ulong Channel, List<ulong> Apollo) ParseCalendar(string? channel, string? apollo, List<SetupBranch> branches)
+    {
+        if (!ulong.TryParse(channel, out var channelId) || channelId == 0
+            || Configuration.ParseChannelList(apollo) is not { Count: > 0 } apolloIds
+            || apolloIds.Contains(channelId)
+            || branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId || b.RosterChannelId == channelId))
+            return (0, []);
+
+        return (channelId, apolloIds);
     }
 
     private static string ToBase64Url(byte[] bytes) =>

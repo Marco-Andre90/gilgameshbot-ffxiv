@@ -18,8 +18,8 @@ public sealed record CalendarOutcome(bool Ok, string Message);
 /// </summary>
 /// <remarks>
 /// <para>
-/// One calendar per calendar channel: branches on the same server that name the same channel
-/// share it, with the events of all their Apollo channels.
+/// One calendar for the whole Free Company, every branch included, with the events of every
+/// configured Apollo channel. It is kept by the plugins connected to the calendar channel's server.
 /// </para>
 /// <para>
 /// Every leader on the server runs the hourly loop, and nobody coordinates: before writing, a
@@ -68,16 +68,20 @@ public sealed class CalendarService
         this.coordinator = coordinator;
     }
 
-    /// <summary>A calendar: its channel and the Apollo channels it reads.</summary>
+    /// <summary>The calendar: its channel and the Apollo channels it reads.</summary>
     public sealed record Setup(ulong ChannelId, List<ulong> SourceIds);
 
-    /// <summary>The calendars of this server, from every branch on it that has one set up.</summary>
-    public List<Setup> Calendars() =>
-        config.Branches.ToList() // snapshot: the settings window may replace the list
-            .Where(b => b.GuildId == guild.Id && b.IsCalendarConfigured)
-            .GroupBy(b => b.CalendarChannelId)
-            .Select(g => new Setup(g.Key, g.Select(b => b.ApolloChannelId).Distinct().ToList()))
-            .ToList();
+    /// <summary>The calendar, when one is set up and its channel is on this session's server; null otherwise.</summary>
+    public Setup? Current()
+    {
+        // Read once: the settings window and a configuration sync replace these from other threads.
+        var channelId = config.CalendarChannelId;
+        var sources = config.ApolloChannelIds.ToList();
+
+        return channelId != 0 && sources.Count > 0 && guild.GetTextChannel(channelId) is not null
+            ? new Setup(channelId, sources)
+            : null;
+    }
 
     // --- Hourly loop ----------------------------------------------------------------------------
 
@@ -93,11 +97,11 @@ public sealed class CalendarService
             {
                 if (coordinator.IsLeader)
                 {
-                    foreach (var setup in Calendars())
+                    if (Current() is { } setup)
                     {
                         var outcome = await UpdateAsync(setup, force: false, change: null, ct);
                         if (!outcome.Ok)
-                            log.Warning("Calendar in channel {Channel}: {Message}", setup.ChannelId, outcome.Message);
+                            log.Warning("Calendar: {Message}", outcome.Message);
                     }
                 }
 
@@ -329,7 +333,7 @@ public sealed class CalendarService
             || !CalendarCustomId.TryParse(component.Data.CustomId, out var id))
             return;
 
-        if (Calendars().FirstOrDefault(c => c.ChannelId == component.ChannelId) is not { } setup)
+        if (Current() is not { } setup || setup.ChannelId != component.ChannelId)
             return;
 
         var options = new RequestOptions { CancelToken = ct };
@@ -472,21 +476,11 @@ public sealed class CalendarService
 
     // --- /calendar ------------------------------------------------------------------------------
 
-    /// <summary>
-    /// The calendar a command run in <paramref name="channelId"/> is about: the one in that channel,
-    /// or the server's only one. Null, with the reason, otherwise.
-    /// </summary>
-    public (Setup? Setup, string? Problem) Target(ulong channelId)
-    {
-        var calendars = Calendars();
-        if (calendars.Count == 0)
-            return (null, "No calendar is set up for this server. Set the calendar and Apollo channels in the plugin's Calendar tab, and publish them.");
-
-        var setup = calendars.FirstOrDefault(c => c.ChannelId == channelId) ?? (calendars.Count == 1 ? calendars[0] : null);
-        return setup is null
-            ? (null, "This server has more than one calendar. Run the command in the calendar's channel.")
-            : (setup, null);
-    }
+    /// <summary>The calendar a <c>/calendar</c> command is about, or the reason there is none on this server.</summary>
+    public (Setup? Setup, string? Problem) Target() =>
+        Current() is { } setup
+            ? (setup, null)
+            : (null, "No calendar is set up on this server. Set the calendar and Apollo channels in the plugin's Calendar tab, and publish them.");
 
     // --- Shared helpers -------------------------------------------------------------------------
 

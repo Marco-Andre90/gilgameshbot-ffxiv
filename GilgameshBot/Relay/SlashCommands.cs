@@ -382,7 +382,7 @@ public sealed class SlashCommands
         var sub = command.Data.Options.FirstOrDefault();
         var value = sub?.Options.FirstOrDefault()?.Value?.ToString()?.Trim();
 
-        var (setup, problem) = calendar.Target(command.ChannelId ?? 0);
+        var (setup, problem) = calendar.Target();
         if (setup is null)
             return problem!;
 
