@@ -281,9 +281,11 @@ public static partial class WeeklyMessage
         for (var i = 0; i < week.Count; i++)
         {
             var e = week[i];
-            var title = MessageFormatter.NeutraliseMassMentions(MessageFormatter.EscapeMarkdown(e.Title));
+            // Inside a link's text Discord shows "\[" as typed, so brackets become look-alikes instead of escapes.
+            var title = MessageFormatter.NeutraliseMassMentions(
+                MessageFormatter.EscapeMarkdown(e.Title.Replace('[', '［').Replace(']', '］')));
             var link = $"https://discord.com/channels/{guildId}/{e.ChannelId}/{e.MessageId}";
-            var entry = $"**[{title}]({link})** · <t:{e.Start.ToUnixTimeSeconds()}:F>\n\n";
+            var entry = $"**[{title}]({link})**\n· <t:{e.Start.ToUnixTimeSeconds()}:F>\n\n";
 
             if (text.Length + entry.Length > MaxEvents)
             {
