@@ -51,8 +51,9 @@ public static class RosterScanner
 
         // The scan edits and deletes the bot's own messages in the roster channel; in a relay or
         // state channel those would be relayed chat and presence messages.
-        if (config.IsRelayOrStateChannel(branch.RosterChannelId) || config.IsCalendarChannel(branch.RosterChannelId))
-            return new RosterOutcome(false, "The roster channel must not be any branch's relay, state or calendar channel.");
+        if (config.IsRelayOrStateChannel(branch.RosterChannelId) || config.IsCalendarChannel(branch.RosterChannelId)
+            || config.IsWeeklyChannel(branch.RosterChannelId))
+            return new RosterOutcome(false, "The roster channel must not be any branch's relay, state or calendar channel, nor a weekly channel.");
 
         if (!await Gate.WaitAsync(0, ct))
             return new RosterOutcome(false, "A roster scan is already running. Try again when it finishes.");

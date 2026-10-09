@@ -8,6 +8,7 @@ using Discord.Net;
 using Discord.WebSocket;
 using GilgameshBot.Calendar;
 using GilgameshBot.Relay;
+using GilgameshBot.Weekly;
 
 namespace GilgameshBot.Setup;
 
@@ -43,9 +44,30 @@ public sealed class SharedConfigFile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ApolloChannels { get; set; }
 
+    /// <summary>
+    /// True on files from plugins that know the weekly settings, like <see cref="CarriesCalendar"/>:
+    /// without it the local weekly settings are kept.
+    /// </summary>
+    [JsonPropertyName("weekly")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CarriesWeekly { get; set; }
+
+    [JsonPropertyName("weeklyChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyChannel { get; set; }
+
+    [JsonPropertyName("weeklyApproval")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyApproval { get; set; }
+
+    [JsonPropertyName("weeklyRole")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyRole { get; set; }
+
     // Parsed, filled in by TryParse.
     [JsonIgnore] public ulong CalendarChannelId { get; set; }
     [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
+    [JsonIgnore] public WeeklyIds Weekly { get; set; } = WeeklyIds.None;
 }
 
 /// <summary>What to tell the officer after publishing. Fixed text plus names from the config.</summary>
@@ -152,6 +174,8 @@ public static class SharedConfig
 
         (parsed.Heartbeat, parsed.Stale) = SetupCode.ClampTimers(parsed.Heartbeat, parsed.Stale);
         (parsed.CalendarChannelId, parsed.ApolloChannelIds) = SetupCode.ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
+        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!,
+            parsed.CalendarChannelId, parsed.ApolloChannelIds);
 
         var by = (parsed.PublishedBy ?? string.Empty).Trim();
         parsed.PublishedBy = by.Length > 100 ? by[..100] : by;
@@ -228,6 +252,12 @@ public static class SharedConfig
             config.CalendarChannelId = 0;
         }
 
+        // The weekly likewise: absent from an older plugin's file means "unknown", not "removed".
+        if (file.CarriesWeekly == true)
+            SetupCode.ApplyWeekly(file.Weekly, config);
+
+        config.DropClashingWeekly();
+
         config.SharedRevision = file.Revision;
         config.SharedPublishedBy = file.PublishedBy;
         config.SharedPublishedAtUtc = file.PublishedAtUtc;
@@ -260,7 +290,7 @@ public static class SharedConfig
                 return new SharedConfigOutcome(false,
                     $"Branch {Label(incomplete)} is incomplete. Finish or remove it before publishing.");
 
-            if ((Preflight(client, branches) ?? await CalendarPreflightAsync(client, config, ct)) is { } problem)
+            if ((Preflight(client, branches) ?? await CalendarPreflightAsync(client, config, ct) ?? await WeeklyPreflightAsync(client, config, ct)) is { } problem)
                 return new SharedConfigOutcome(false, $"{problem} Nothing was published.");
 
             var channels = StateChannels(client, branches);
@@ -312,6 +342,10 @@ public static class SharedConfig
                 CarriesCalendar = true,
                 CalendarChannel = SetupCode.FormatCalendar(config).Channel,
                 ApolloChannels = SetupCode.FormatCalendar(config).Apollo,
+                CarriesWeekly = true,
+                WeeklyChannel = SetupCode.FormatWeekly(config).Channel,
+                WeeklyApproval = SetupCode.FormatWeekly(config).Approval,
+                WeeklyRole = SetupCode.FormatWeekly(config).Role,
             };
 
             // Checked exactly as a reader will check it: a file that other plugins would ignore
@@ -324,6 +358,11 @@ public static class SharedConfig
             if (config.IsCalendarConfigured && check.CalendarChannelId == 0)
                 return new SharedConfigOutcome(false,
                     "The calendar channel must not be an Apollo channel or any branch's relay, state or roster channel. Nothing was published.");
+
+            if (config.IsWeeklyConfigured && check.Weekly == WeeklyIds.None)
+                return new SharedConfigOutcome(false,
+                    "The weekly's channels must be two different channels, and neither the calendar channel, an Apollo channel "
+                    + "nor any branch's relay, state or roster channel. Nothing was published.");
 
             var failed = new List<string>();
             foreach (var channel in channels)
@@ -424,6 +463,13 @@ public static class SharedConfig
 
         return null;
     }
+
+    /// <summary>
+    /// The weekly's channels and role must exist, on one server with the Apollo channels, with the
+    /// permissions the weekly needs. Null when all is well or there is no weekly.
+    /// </summary>
+    private static async Task<string?> WeeklyPreflightAsync(DiscordSocketClient client, Configuration config, CancellationToken ct) =>
+        config.IsWeeklyConfigured ? (await WeeklyChecks.ResolveAsync(client, config, guildId: null, ct)).Problem : null;
 
     /// <summary>Edits the channel's newest-revision copy (or posts one) and deletes any other copy.</summary>
     private static async Task WriteAsync(

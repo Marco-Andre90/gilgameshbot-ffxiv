@@ -12,7 +12,7 @@ namespace GilgameshBot.Calendar.Rendering;
 /// </summary>
 internal static partial class CalendarFonts
 {
-    private static readonly Lazy<(FontFamily Title, FontFamily Spooky, FontFamily Body)> Families = new(Load);
+    private static readonly Lazy<(FontFamily Title, FontFamily Spooky, FontFamily Body, FontFamily Franklin)> Families = new(Load);
 
     /// <summary>Cinzel: month names and week days.</summary>
     public static FontFamily Title => Families.Value.Title;
@@ -23,7 +23,10 @@ internal static partial class CalendarFonts
     /// <summary>Noto Sans: day numbers and event titles; broad coverage, also the fallback for the other two.</summary>
     public static FontFamily Body => Families.Value.Body;
 
-    private static (FontFamily, FontFamily, FontFamily) Load()
+    /// <summary>Libre Franklin SemiBold: the top line of the weekly header.</summary>
+    public static FontFamily Franklin => Families.Value.Franklin;
+
+    private static (FontFamily, FontFamily, FontFamily, FontFamily) Load()
     {
         var collection = new FontCollection();
         var assembly = typeof(CalendarFonts).Assembly;
@@ -35,7 +38,7 @@ internal static partial class CalendarFonts
             return collection.Add(stream);
         }
 
-        return (Add("Cinzel.ttf"), Add("Creepster.ttf"), Add("NotoSans.ttf"));
+        return (Add("Cinzel.ttf"), Add("Creepster.ttf"), Add("NotoSans.ttf"), Add("LibreFranklin-SemiBold.ttf"));
     }
 
     [GeneratedRegex(@"<a?:[A-Za-z0-9_~]{1,32}:\d{1,20}>")]

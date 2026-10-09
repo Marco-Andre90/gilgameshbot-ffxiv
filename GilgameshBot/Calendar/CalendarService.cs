@@ -144,8 +144,8 @@ public sealed class CalendarService
     {
         // The update edits and deletes the bot's own messages here; in a relay, state or roster
         // channel those would be relayed chat, presence messages or roster reports.
-        if (config.IsRelayOrStateChannel(setup.ChannelId) || config.IsRosterChannel(setup.ChannelId))
-            return new CalendarOutcome(false, "The calendar channel must not be any branch's relay, state or roster channel.");
+        if (config.IsRelayOrStateChannel(setup.ChannelId) || config.IsRosterChannel(setup.ChannelId) || config.IsWeeklyChannel(setup.ChannelId))
+            return new CalendarOutcome(false, "The calendar channel must not be any branch's relay, state or roster channel, nor a weekly channel.");
 
         try
         {
@@ -527,6 +527,40 @@ public sealed class CalendarService
         Current() is { } setup
             ? (setup, null)
             : (null, "No calendar is set up. Set the calendar and Apollo channels in the plugin's Calendar tab, and publish them.");
+
+    // --- For the weekly ------------------------------------------------------------------------
+
+    /// <summary>
+    /// The calendar's time zone as everybody sees it, read from the calendar message; the default
+    /// zone when there is no calendar on this server or it cannot be read. The weekly dates its
+    /// issues in it.
+    /// </summary>
+    public async Task<TimeZoneInfo> TimeZoneAsync(CancellationToken ct)
+    {
+        var key = CalendarSettings.Default.TimeZone;
+        if (Current() is { } setup)
+        {
+            try
+            {
+                var options = new RequestOptions { CancelToken = ct };
+                if (await CalendarChannels.ResolveAsync(client, setup.ChannelId, options) is { } channel
+                    && channel.GuildId == guildId
+                    && CalendarChannels.Permissions(client, channel) is { ViewChannel: true, ReadMessageHistory: true })
+                {
+                    var found = await FindAsync(channel, client.CurrentUser.Id, options);
+                    var holder = found.Message ?? found.Strays.OrderByDescending(m => m.Id).FirstOrDefault();
+                    if (holder is not null && ReadSettings(holder) is { } settings)
+                        key = settings.TimeZone;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.Debug(ex, "Could not read the calendar's time zone; using the default.");
+            }
+        }
+
+        return Zone(key).Tz;
+    }
 
     // --- Shared helpers -------------------------------------------------------------------------
 

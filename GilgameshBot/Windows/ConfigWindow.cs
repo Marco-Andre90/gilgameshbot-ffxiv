@@ -9,6 +9,7 @@ using GilgameshBot.Calendar;
 using GilgameshBot.Relay;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
+using GilgameshBot.Weekly;
 
 namespace GilgameshBot.Windows;
 
@@ -87,6 +88,15 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool calendarMessageIsWarning;
     private Task<CalendarOutcome>? calendarUpdate;
 
+    // Weekly Announcements tab: its edit buffers (filled like the calendar's) and the start job.
+    private bool weeklyBuffersLoaded;
+    private string weeklyChannelIdBuffer = string.Empty;
+    private string weeklyApprovalIdBuffer = string.Empty;
+    private string weeklyRoleIdBuffer = string.Empty;
+    private string? weeklyMessage;
+    private bool weeklyMessageIsWarning;
+    private Task<WeeklyOutcome>? weeklyStart;
+
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
         this.plugin = plugin;
@@ -143,6 +153,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ConsumeSetupCodeAction();
         ConsumeRosterJobs();
         ConsumeCalendarUpdate();
+        ConsumeWeeklyStart();
         ConsumePublishAction();
 
         // A newer shared configuration was applied (or published, or imported): the edit buffers
@@ -187,6 +198,12 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (calendarTab)
                 DrawCalendarTab();
+        }
+
+        using (var weeklyTab = ImRaii.TabItem("Weekly Announcements"))
+        {
+            if (weeklyTab)
+                DrawWeeklyTab();
         }
 
         using (var advancedTab = ImRaii.TabItem("Advanced"))
@@ -359,7 +376,7 @@ public sealed class ConfigWindow : Window, IDisposable
         TextWrappedColoured(Grey,
             "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes), "
             + "see who is relaying with /relaystatus, scan a Free Company's roster with /fcscan "
-            + "and change or refresh the calendar with /calendar. "
+            + "change or refresh the calendar with /calendar and write the weekly with /weekly. "
             + "They only work while at least one member's plugin is connected.");
         ImGuiHelpers.ScaledDummy(2);
         TextWrappedColoured(Grey,
@@ -879,7 +896,7 @@ public sealed class ConfigWindow : Window, IDisposable
         // Outside the disabled scope, so the explanation still works while the button is greyed out.
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Makes your Free Company branches (roster and calendar settings included) and timers the configuration every member's "
+            "Makes your Free Company branches (roster, calendar and weekly settings included) and timers the configuration every member's "
             + "plugin follows. It is kept in each branch's state channel; the bot token is not part of it.\n\n"
             + "Plugins check when they connect and take over a newer revision, replacing their own branch table. "
             + "Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
@@ -952,6 +969,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ClearBranchEditor();
         rosterBranch = -1;
         calendarBuffersLoaded = false;
+        weeklyBuffersLoaded = false;
     }
 
     // --- FC roster tab ----------------------------------------------------------------------
@@ -1138,9 +1156,10 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        if (rosterChannelId != 0 && (config.IsRelayOrStateChannel(rosterChannelId) || config.IsCalendarChannel(rosterChannelId)))
+        if (rosterChannelId != 0 && (config.IsRelayOrStateChannel(rosterChannelId) || config.IsCalendarChannel(rosterChannelId)
+                                     || config.IsWeeklyChannel(rosterChannelId)))
         {
-            rosterMessage = "The roster channel must not be any branch's relay, state or calendar channel.";
+            rosterMessage = "The roster channel must not be any branch's relay, state or calendar channel, nor a weekly channel.";
             return;
         }
 
@@ -1386,6 +1405,13 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
+        // The weekly writes in its channels too, and reads the Apollo channels.
+        if (config.IsWeeklyChannel(calendarChannelId) || apolloChannelIds.Any(config.IsWeeklyChannel))
+        {
+            calendarMessage = "The calendar and Apollo channels must not be the weekly's channels.";
+            return;
+        }
+
         config.CalendarChannelId = calendarChannelId;
         config.ApolloChannelIds = apolloChannelIds; // replaced, never mutated: background tasks read it
         config.Save();
@@ -1411,6 +1437,147 @@ public sealed class ConfigWindow : Window, IDisposable
 
         calendarMessage = outcome.Message;
         calendarMessageIsWarning = !outcome.Ok;
+    }
+
+    // --- Weekly Announcements tab --------------------------------------------------------------
+
+    private void DrawWeeklyTab()
+    {
+        ImGuiHelpers.ScaledDummy(4);
+
+        TextWrappedColoured(Grey,
+            "The Fat Cat Weekly: officers write it in a Discord form, the approver role reviews a preview in the approval "
+            + "channel, and Approve posts it in the announcement channel as \"The Fat Cat Weekly\". This week's events come from "
+            + "the calendar's Apollo channels and stay current while the week lasts. Officers can also start it with /weekly in Discord.");
+        ImGuiHelpers.ScaledDummy(6);
+
+        SectionHeader("Channels and role");
+
+        if (!weeklyBuffersLoaded)
+        {
+            weeklyChannelIdBuffer = config.WeeklyChannelId == 0 ? string.Empty : config.WeeklyChannelId.ToString();
+            weeklyApprovalIdBuffer = config.WeeklyApprovalChannelId == 0 ? string.Empty : config.WeeklyApprovalChannelId.ToString();
+            weeklyRoleIdBuffer = config.WeeklyApproverRoleId == 0 ? string.Empty : config.WeeklyApproverRoleId.ToString();
+            weeklyBuffersLoaded = true;
+        }
+
+        ImGui.InputText("Announcement channel ID", ref weeklyChannelIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Where the weekly is posted. The bot creates a webhook there named The Fat Cat Weekly, so it needs Manage Webhooks "
+            + "and Read Message History. A text channel, not a thread, on the calendar's server.");
+
+        ImGui.InputText("Approval channel ID", ref weeklyApprovalIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Where previews wait for approval, and where Start weekly posts its button. Keep it for officers. The bot needs "
+            + "View Channel, Send Messages, Embed Links, Attach Files and Read Message History there.");
+
+        ImGui.InputText("Approver role ID", ref weeklyRoleIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Mentioned on every preview; its members approve or reject it. Make the role mentionable, or give the bot "
+            + "Mention @everyone, @here and All Roles in the approval channel. Copy its ID with Developer Mode on: "
+            + "Server Settings → Roles → right-click the role.");
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (ImGui.Button("Save weekly settings", ImGuiHelpers.ScaledVector2(180, 0)))
+            SaveWeeklySettings();
+
+        SectionGap();
+        SectionHeader("Start");
+
+        var draft = config.WeeklyDraftMode;
+        if (ImGui.Checkbox("Draft mode", ref draft))
+        {
+            config.WeeklyDraftMode = draft;
+            config.Save();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "For trying it out: the preview notifies nobody and has only a Delete draft button, and nothing is ever posted. "
+            + "Only for weeklies you start here; /weekly has its own draft option.");
+
+        var canStart = weeklyStart is null && config.IsWeeklyConfigured && plugin.Bridge.CanStartWeekly;
+        using (ImRaii.Disabled(!canStart))
+        {
+            if (ImGui.Button(weeklyStart is null ? "Start weekly" : "Starting…", ImGuiHelpers.ScaledVector2(140, 0)))
+            {
+                var startDraft = config.WeeklyDraftMode;
+                weeklyStart = Task.Run(() => plugin.Bridge.StartWeeklyAsync(startDraft));
+                weeklyMessage = null;
+            }
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Posts a Write the weekly button in the approval channel. Click it in Discord to fill in the form: game news, "
+            + "FC news, Cat of the Week, notes from the officers and The Fat Cat says. Needs the plugin connected.");
+
+        if (!config.IsWeeklyConfigured)
+            TextColoured(Grey, "Save the announcement channel, approval channel and approver role first.");
+        else if (!plugin.Bridge.CanStartWeekly)
+            TextColoured(Grey, "Connect first.");
+
+        if (weeklyMessage is { } msg)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextWrappedColoured(weeklyMessageIsWarning ? Yellow : Green, msg);
+        }
+    }
+
+    private void SaveWeeklySettings()
+    {
+        weeklyMessageIsWarning = true;
+
+        var ids = new ulong[3];
+        var buffers = new[] { weeklyChannelIdBuffer, weeklyApprovalIdBuffer, weeklyRoleIdBuffer };
+        var names = new[] { "Announcement channel ID", "Approval channel ID", "Approver role ID" };
+        for (var i = 0; i < 3; i++)
+        {
+            if (buffers[i].Trim().Length > 0 && !ulong.TryParse(buffers[i].Trim(), out ids[i]))
+            {
+                weeklyMessage = $"{names[i]} must be a number.";
+                return;
+            }
+        }
+
+        // Any empty field turns the weekly off.
+        var configured = ids.All(id => id != 0);
+        if (configured && config.WeeklyChannelProblem(ids[0], ids[1]) is { } problem)
+        {
+            weeklyMessage = problem;
+            return;
+        }
+
+        config.WeeklyChannelId = configured ? ids[0] : 0;
+        config.WeeklyApprovalChannelId = configured ? ids[1] : 0;
+        config.WeeklyApproverRoleId = configured ? ids[2] : 0;
+        config.Save();
+        weeklyBuffersLoaded = false;
+
+        weeklyMessage = configured
+            ? "Saved. Publish it (Advanced tab) to share it."
+            : "Saved. The weekly stays off until both channels and the role are filled in.";
+        weeklyMessageIsWarning = !configured;
+    }
+
+    /// <summary>Picks up a finished "Start weekly". Called once per frame.</summary>
+    private void ConsumeWeeklyStart()
+    {
+        if (weeklyStart is not { IsCompleted: true } start)
+            return;
+
+        weeklyStart = null;
+
+        var outcome = start.IsCompletedSuccessfully
+            ? start.Result
+            : new WeeklyOutcome(false, "Starting the weekly failed; see /xllog for details.");
+
+        weeklyMessage = outcome.Message;
+        weeklyMessageIsWarning = !outcome.Ok;
     }
 
     private void DrawBehaviourSettings()

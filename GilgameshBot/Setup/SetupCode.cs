@@ -98,9 +98,34 @@ public sealed class SetupPayload
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ApolloChannels { get; set; }
 
+    /// <summary>
+    /// The weekly's announcement channel. Optional, like the calendar: absent on codes from older
+    /// plugins and when there is no weekly, and then an import keeps the local weekly settings.
+    /// </summary>
+    [JsonPropertyName("weeklyChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyChannel { get; set; }
+
+    /// <summary>The weekly's approval channel. Optional, with <see cref="WeeklyChannel"/>.</summary>
+    [JsonPropertyName("weeklyApproval")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyApproval { get; set; }
+
+    /// <summary>The weekly's approver role. Optional, with <see cref="WeeklyChannel"/>.</summary>
+    [JsonPropertyName("weeklyRole")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyRole { get; set; }
+
     // Parsed IDs, filled in by TryDecode once validated.
     [JsonIgnore] public ulong CalendarChannelId { get; set; }
     [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
+    [JsonIgnore] public WeeklyIds Weekly { get; set; } = WeeklyIds.None;
+}
+
+/// <summary>The weekly's channels and role as they are applied; all zero when there is no weekly.</summary>
+public sealed record WeeklyIds(ulong Channel, ulong Approval, ulong Role)
+{
+    public static readonly WeeklyIds None = new(0, 0, 0);
 }
 
 /// <summary>
@@ -149,6 +174,9 @@ public static class SetupCode
             Receipt = receipt,
             CalendarChannel = FormatCalendar(config).Channel,
             ApolloChannels = FormatCalendar(config).Apollo,
+            WeeklyChannel = FormatWeekly(config).Channel,
+            WeeklyApproval = FormatWeekly(config).Approval,
+            WeeklyRole = FormatWeekly(config).Role,
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -270,6 +298,13 @@ public static class SetupCode
             (parsed.CalendarChannelId, parsed.ApolloChannelIds) = ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
         }
 
+        // The same for the weekly.
+        if (parsed.WeeklyChannel is not null)
+        {
+            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!,
+                parsed.CalendarChannelId, parsed.ApolloChannelIds);
+        }
+
         payload = parsed;
         return true;
     }
@@ -363,6 +398,12 @@ public static class SetupCode
             config.CalendarChannelId = 0;
         }
 
+        // The weekly likewise; local settings that now clash with the imported ones are dropped.
+        if (payload.WeeklyChannel is not null)
+            ApplyWeekly(payload.Weekly, config);
+
+        config.DropClashingWeekly();
+
         // The code's revision, or 0 when it carries none: the next sync then brings in whatever
         // the state channels hold, so a code older than the shared configuration heals itself.
         config.SharedRevision = payload.Revision ?? 0;
@@ -432,6 +473,44 @@ public static class SetupCode
             return (0, []);
 
         return (channelId, apolloIds);
+    }
+
+    /// <summary>The weekly settings as they travel in a setup code or the shared configuration; nulls when there is no weekly.</summary>
+    internal static (string? Channel, string? Approval, string? Role) FormatWeekly(Configuration config) =>
+        config.IsWeeklyConfigured
+            ? (config.WeeklyChannelId.ToString(), config.WeeklyApprovalChannelId.ToString(), config.WeeklyApproverRoleId.ToString())
+            : (null, null, null);
+
+    /// <summary>
+    /// The weekly settings from a setup code or the shared configuration; <see cref="WeeklyIds.None"/>
+    /// when they are missing or malformed, or when a channel is any branch's relay, state or roster
+    /// channel, the calendar channel or an Apollo channel, or both channels are the same.
+    /// </summary>
+    internal static WeeklyIds ParseWeekly(
+        string? channel, string? approval, string? role, List<SetupBranch> branches, ulong calendarChannel, List<ulong> apollo)
+    {
+        if (!ulong.TryParse(channel, out var channelId) || channelId == 0
+            || !ulong.TryParse(approval, out var approvalId) || approvalId == 0
+            || !ulong.TryParse(role, out var roleId) || roleId == 0
+            || channelId == approvalId)
+            return WeeklyIds.None;
+
+        foreach (var id in new[] { channelId, approvalId })
+        {
+            if (id == calendarChannel || apollo.Contains(id)
+                || branches.Any(b => b.ChannelId == id || b.StateChannelId == id || b.RosterChannelId == id))
+                return WeeklyIds.None;
+        }
+
+        return new WeeklyIds(channelId, approvalId, roleId);
+    }
+
+    /// <summary>Writes parsed weekly settings into the config. Does not save.</summary>
+    internal static void ApplyWeekly(WeeklyIds weekly, Configuration config)
+    {
+        config.WeeklyChannelId = weekly.Channel;
+        config.WeeklyApprovalChannelId = weekly.Approval;
+        config.WeeklyApproverRoleId = weekly.Role;
     }
 
     private static string ToBase64Url(byte[] bytes) =>
