@@ -72,6 +72,10 @@ internal static class WeeklyChecks
         if (WebhookHome(client, announcement) is not var (home, threadId))
             return (null, "The weekly's announcement thread has no parent channel the bot can see.");
 
+        // An archived announcement thread is reopened before the weekly goes out or is refreshed.
+        if (announcement is IThreadChannel && CalendarChannels.Permissions(client, announcement) is not { SendMessagesInThreads: true })
+            return (null, "The bot needs Send Messages in Threads in the parent channel of the weekly's announcement thread.");
+
         // Previews go out through a webhook too, so they look exactly like the weekly; the bot
         // still posts the "Write the weekly" button there itself.
         if (CalendarChannels.Permissions(client, approval) is not { } perms

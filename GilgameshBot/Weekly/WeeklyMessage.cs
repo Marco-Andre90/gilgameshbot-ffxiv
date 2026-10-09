@@ -60,8 +60,8 @@ public static partial class WeeklyMessage
     private const string SaysField = "says";
 
     // The form's limits keep the whole message under Discord's 6000 characters across its embeds:
-    // these add up to 3700, the events take at most MaxEvents (+ one "…and N more" line), and the
-    // titles, labels and footer about 300 more.
+    // these add up to 3700, the events take at most MaxEvents (+ one "…and N more" line), the
+    // width padding about 260 and the titles and footer about 150 more: about 5600 at worst.
     private const int MaxGame = 1000;
     private const int MaxFc = 1000;
     private const int MaxNotes = 1200;
@@ -169,7 +169,7 @@ public static partial class WeeklyMessage
     public static List<EmbedBuilder> Manual(IMessage message)
     {
         var embeds = message.Embeds
-            .Where(e => e.Title is { } t && ManualTitles.Contains(t))
+            .Where(e => e.Title is { } t && ManualTitles.Contains(t) && !string.IsNullOrEmpty(Unpad(e.Description)))
             .Select(e =>
             {
                 var b = new EmbedBuilder().WithTitle(e.Title);

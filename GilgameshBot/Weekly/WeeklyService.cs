@@ -300,10 +300,10 @@ public sealed class WeeklyService
         if (component.GuildId != guildId || ct.IsCancellationRequested || !id.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal))
             return;
 
-        // Discord only sends clicks on the bot's own messages and its webhooks' (previews), but the
-        // channel must still be the weekly's.
-        if (component.ChannelId != config.WeeklyApprovalChannelId
-            || (component.Message.Author.Id != client.CurrentUser.Id && !component.Message.Author.IsWebhook))
+        // Discord only sends clicks on the bot's own messages and its webhooks' (previews), so the
+        // custom id and the channel are enough. Not the author: in a thread missing from the cache
+        // (archived since the last connect) Discord.Net cannot tell a webhook author apart.
+        if (component.ChannelId != config.WeeklyApprovalChannelId)
             return;
 
         var options = new RequestOptions { CancelToken = ct };
@@ -363,30 +363,13 @@ public sealed class WeeklyService
 
     private async Task DeleteDraftAsync(SocketMessageComponent component, CancellationToken ct)
     {
+        var options = new RequestOptions { CancelToken = ct };
         try
         {
-            var options = new RequestOptions { CancelToken = ct };
-            var draft = component.Message;
-            if (!draft.Author.IsWebhook)
-            {
-                await draft.DeleteAsync(options);
-                return;
-            }
-
-            // A webhook's message is deleted through that webhook: the bot itself may not delete it.
-            var (target, problem) = await WeeklyChecks.ResolveAsync(client, config, guildId, ct);
-            if (target is null)
-            {
-                await component.FollowupAsync($"The draft could not be deleted: {problem}", ephemeral: true,
-                    allowedMentions: AllowedMentions.None, options: options);
-                return;
-            }
-
-            if ((await BotWebhooksAsync(target.ApprovalHome, options)).FirstOrDefault(h => h.Id == draft.Author.Id) is not { } webhook)
-                return;
-
-            using var hook = new DiscordWebhookClient(webhook);
-            await hook.DeleteMessageAsync(draft.Id, options, target.ApprovalThreadId);
+            // Through the interaction: the clicked message is its "original response", whoever
+            // posted it (the bot, or its webhook, whose messages the bot itself may not delete).
+            await ClickedChannelAsync(component, options);
+            await component.DeleteOriginalResponseAsync(options);
         }
         catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
         {
@@ -399,6 +382,15 @@ public sealed class WeeklyService
         catch (Exception ex)
         {
             log.Warning(ex, "Deleting a weekly draft failed.");
+            try
+            {
+                await component.FollowupAsync("The draft could not be deleted; see /xllog of the plugin that tried.", ephemeral: true,
+                    allowedMentions: AllowedMentions.None, options: options);
+            }
+            catch
+            {
+                // Best effort.
+            }
         }
     }
 
@@ -423,7 +415,7 @@ public sealed class WeeklyService
         {
             // Settled already (posted, rejected, or another approver is posting): nothing to do.
             // A "posting" claim left behind by a plugin that crashed mid-post may be taken over.
-            if (await FreshAsync(preview, options) is not { } fresh)
+            if (await FreshAsync(component, options) is not { } fresh)
                 return;
 
             if (HasStatus(fresh) && !IsAbandoned(fresh, component.CreatedAt))
@@ -443,7 +435,7 @@ public sealed class WeeklyService
             var claimedAt = System.Diagnostics.Stopwatch.StartNew();
 
             await Task.Delay(ClaimSettle, ct);
-            if (await FreshAsync(preview, options) is not { } settled
+            if (await FreshAsync(component, options) is not { } settled
                 || !ApolloReader.CustomIds(settled.Components).Contains(claim))
             {
                 // Another click won, or the preview was rejected meanwhile: theirs to finish.
@@ -475,7 +467,7 @@ public sealed class WeeklyService
                 {
                     // A slower claim that lost the race: the winner has already said where it went, or
                     // this very preview is what went out, and the line saying so was overwritten.
-                    if (await FreshAsync(preview, options) is { } current && HasLine(current, ApprovedLine))
+                    if (await FreshAsync(component, options) is { } current && HasLine(current, ApprovedLine))
                         return;
 
                     if (SameSections(last, preview))
@@ -504,7 +496,7 @@ public sealed class WeeklyService
 
                 // Still ours? A slower click may have claimed it since; then it posts, not this one.
                 // And past the deadline another click may take it over: stop rather than overlap.
-                if (await FreshAsync(preview, options) is not { } stillOurs
+                if (await FreshAsync(component, options) is not { } stillOurs
                     || !ApolloReader.CustomIds(stillOurs.Components).Contains(claim))
                 {
                     claimed = false;
@@ -582,7 +574,7 @@ public sealed class WeeklyService
             var options = new RequestOptions { CancelToken = ct };
 
             // Too late when it is posted, or being posted.
-            if (await FreshAsync(component.Message, options) is not { } fresh)
+            if (await FreshAsync(component, options) is not { } fresh)
                 return;
 
             if (HasStatus(fresh))
@@ -613,11 +605,24 @@ public sealed class WeeklyService
     /// <summary>How long a claim on a preview is left to settle before the claimer looks again.</summary>
     private static readonly TimeSpan ClaimSettle = TimeSpan.FromSeconds(2);
 
-    /// <summary>The preview as it is now in Discord; null when it was deleted.</summary>
-    private async Task<IMessage?> FreshAsync(IMessage preview, RequestOptions options) =>
-        await CalendarChannels.ResolveAsync(client, preview.Channel.Id, options) is { } channel
-            ? await ((IMessageChannel)channel).GetMessageAsync(preview.Id, CacheMode.AllowDownload, options)
+    /// <summary>
+    /// The clicked preview as it is now in Discord; null when it was deleted. The channel comes
+    /// from the click, not the message: an archived thread is not in the cache.
+    /// </summary>
+    private async Task<IMessage?> FreshAsync(SocketMessageComponent component, RequestOptions options) =>
+        await ClickedChannelAsync(component, options) is { } channel
+            ? await ((IMessageChannel)channel).GetMessageAsync(component.Message.Id, CacheMode.AllowDownload, options)
             : null;
+
+    /// <summary>The channel or thread of a click, reopened when it is an archived thread so its messages can be edited.</summary>
+    private async Task<ITextChannel?> ClickedChannelAsync(SocketMessageComponent component, RequestOptions options)
+    {
+        if (component.ChannelId is not { } id || await CalendarChannels.ResolveAsync(client, id, options) is not { } channel)
+            return null;
+
+        await CalendarChannels.ReopenAsync(channel, options);
+        return channel;
+    }
 
     /// <summary>True when <paramref name="posted"/> carries the same officers' sections as <paramref name="preview"/>.</summary>
     private static bool SameSections(IMessage posted, IMessage preview)
