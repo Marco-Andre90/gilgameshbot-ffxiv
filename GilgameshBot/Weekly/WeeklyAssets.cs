@@ -17,6 +17,9 @@ internal static class WeeklyAssets
     /// <summary>Thumbnail of "This week's events".</summary>
     public const string EventThumbnail = "event-thumbnail.png";
 
+    /// <summary>Transparent, 1000 × 1: the picture every embed carries so they all take the same width.</summary>
+    public const string Spacer = "spacer.png";
+
     private static readonly ConcurrentDictionary<string, byte[]> Cache = new();
 
     /// <summary>The bytes of <paramref name="name"/>; never modify them.</summary>

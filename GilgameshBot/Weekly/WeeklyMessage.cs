@@ -30,7 +30,7 @@ public sealed record WeeklyIssue(int Number, DateOnly First)
 /// </summary>
 /// <remarks>
 /// <para>
-/// The message is the header picture and six embeds (see the issue that specified it): header,
+/// The message is the header picture, as a plain attachment above everything, and five embeds:
 /// this week's events, game news, FC news (with the Cat of the Week), notes from the officers and
 /// "The Fat Cat says:" with the footer. Sections left blank are left out; the events and the last
 /// embed are always there.
@@ -199,22 +199,27 @@ public static partial class WeeklyMessage
     }
 
     /// <summary>
-    /// The whole message: header, events, the officers' embeds and the footer, plus the files they
-    /// show (the header picture is rendered here). Events are those starting in
-    /// [<paramref name="from"/>, <paramref name="from"/> + 7 days), and those under way at
-    /// <paramref name="from"/>.
+    /// The whole message: events, the officers' embeds and the footer, plus the files they show.
+    /// The header picture (rendered here) is a plain attachment that no embed refers to: Discord
+    /// shows such a picture above the embeds, at full width and without a coloured bar, where an
+    /// embed would shrink it. Every embed carries a transparent 1-pixel-high picture across its
+    /// width, so they all take the same width instead of fitting their text. Events are those
+    /// starting in [<paramref name="from"/>, <paramref name="from"/> + 7 days), and those under
+    /// way at <paramref name="from"/>.
     /// </summary>
     public static (Embed[] Embeds, List<(string Name, byte[] Bytes)> Files) Assemble(
         List<EmbedBuilder> manual, WeeklyIssue issue, IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
     {
+        const string spacer = "attachment://" + WeeklyAssets.Spacer;
+
         var embeds = new List<Embed>
         {
-            new EmbedBuilder().WithColor(HeaderColor).WithImageUrl("attachment://" + WeeklyHeader.FileName).Build(),
             new EmbedBuilder()
                 .WithTitle(EventsTitle)
                 .WithDescription(EventsText(events, from, guildId))
                 .WithColor(EventsColor)
                 .WithThumbnailUrl("attachment://" + WeeklyAssets.EventThumbnail)
+                .WithImageUrl(spacer)
                 .Build(),
         };
 
@@ -225,7 +230,7 @@ public static partial class WeeklyMessage
                 b.WithThumbnailUrl("attachment://" + WeeklyAssets.Sticker).WithFooter(Footer(issue));
             }
 
-            embeds.Add(b.Build());
+            embeds.Add(b.WithImageUrl(spacer).Build());
         }
 
         var files = new List<(string, byte[])>
@@ -233,6 +238,7 @@ public static partial class WeeklyMessage
             (WeeklyHeader.FileName, WeeklyHeader.Render(issue.Number, issue.First, issue.Last)),
             (WeeklyAssets.EventThumbnail, WeeklyAssets.Get(WeeklyAssets.EventThumbnail)),
             (WeeklyAssets.Sticker, WeeklyAssets.Get(WeeklyAssets.Sticker)),
+            (WeeklyAssets.Spacer, WeeklyAssets.Get(WeeklyAssets.Spacer)),
         };
 
         return (embeds.ToArray(), files);
