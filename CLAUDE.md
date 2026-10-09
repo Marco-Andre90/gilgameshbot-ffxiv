@@ -42,7 +42,7 @@ GilgameshBot/
   Calendar/CalendarThemes       theme keys (clean, wow, halloween, seasonal) · CalendarTimeZones: fixed zone list (Windows + IANA ids)
   Calendar/Rendering/           ImageSharp renderer: Canvas (scaled drawing), CleanTheme, TexturedTheme (WoW, Halloween), Spooky, fonts
   Weekly/WeeklyService          per session: /weekly + Start weekly, form → preview, Approve/Reject/Delete draft, webhook, hourly events refresh
-  Weekly/WeeklyMessage          the form, the header attachment and five embeds (spacer for equal widths), footer (issue + week) read back, preview text and buttons ("gbweekly:")
+  Weekly/WeeklyMessage          the form, the header attachment and five embeds (a last line of braille blanks for equal widths), footer (issue + week) read back, preview text and buttons ("gbweekly:")
   Weekly/WeeklyChecks           resolves the weekly's channels and role and checks every permission before any write
   Weekly/WeeklyHeader           draws issue number + dates on the header template (Libre Franklin, tracked glyph by glyph)
   Weekly/WeeklyAssets           embedded pictures: header template (@2x), webhook icon, the two thumbnails

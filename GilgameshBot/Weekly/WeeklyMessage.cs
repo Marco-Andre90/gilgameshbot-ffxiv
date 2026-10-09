@@ -68,7 +68,7 @@ public static partial class WeeklyMessage
     private const int MaxCat = 300;
     private const int MaxNotes = 1200;
     private const int MaxSays = 500;
-    private const int MaxEvents = 1500;
+    private const int MaxEvents = 1400;
 
     private const string EventsTitle = "This week's events";
     private const string GameTitle = "Game news";
@@ -183,8 +183,8 @@ public static partial class WeeklyMessage
             .Select(e =>
             {
                 var b = new EmbedBuilder().WithTitle(e.Title);
-                if (!string.IsNullOrEmpty(e.Description))
-                    b.WithDescription(e.Description);
+                if (Unpad(e.Description) is { Length: > 0 } text)
+                    b.WithDescription(text);
                 if (e.Color is { } c)
                     b.WithColor(c);
                 return b;
@@ -202,35 +202,31 @@ public static partial class WeeklyMessage
     /// The whole message: events, the officers' embeds and the footer, plus the files they show.
     /// The header picture (rendered here) is a plain attachment that no embed refers to: Discord
     /// shows such a picture above the embeds, at full width and without a coloured bar, where an
-    /// embed would shrink it. Every embed carries a transparent 1-pixel-high picture across its
-    /// width, so they all take the same width instead of fitting their text. Events are those
-    /// starting in [<paramref name="from"/>, <paramref name="from"/> + 7 days), and those under
-    /// way at <paramref name="from"/>.
+    /// embed would shrink it. Every embed ends with a line of invisible characters (see
+    /// <see cref="Pad"/>), so they all stretch to Discord's widest embed instead of fitting their
+    /// text. Events are those starting in [<paramref name="from"/>, <paramref name="from"/> + 7
+    /// days), and those under way at <paramref name="from"/>.
     /// </summary>
     public static (Embed[] Embeds, List<(string Name, byte[] Bytes)> Files) Assemble(
         List<EmbedBuilder> manual, WeeklyIssue issue, IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
     {
-        const string spacer = "attachment://" + WeeklyAssets.Spacer;
-
         var embeds = new List<Embed>
         {
             new EmbedBuilder()
                 .WithTitle(EventsTitle)
-                .WithDescription(EventsText(events, from, guildId))
+                .WithDescription(Pad(EventsText(events, from, guildId), thumbnail: true))
                 .WithColor(EventsColor)
                 .WithThumbnailUrl("attachment://" + WeeklyAssets.EventThumbnail)
-                .WithImageUrl(spacer)
                 .Build(),
         };
 
         foreach (var b in manual)
         {
-            if (b.Title == SaysTitle)
-            {
+            var says = b.Title == SaysTitle;
+            if (says)
                 b.WithThumbnailUrl("attachment://" + WeeklyAssets.Sticker).WithFooter(Footer(issue));
-            }
 
-            embeds.Add(b.WithImageUrl(spacer).Build());
+            embeds.Add(b.WithDescription(Pad(b.Description, thumbnail: says)).Build());
         }
 
         var files = new List<(string, byte[])>
@@ -238,10 +234,39 @@ public static partial class WeeklyMessage
             (WeeklyHeader.FileName, WeeklyHeader.Render(issue.Number, issue.First, issue.Last)),
             (WeeklyAssets.EventThumbnail, WeeklyAssets.Get(WeeklyAssets.EventThumbnail)),
             (WeeklyAssets.Sticker, WeeklyAssets.Get(WeeklyAssets.Sticker)),
-            (WeeklyAssets.Spacer, WeeklyAssets.Get(WeeklyAssets.Spacer)),
         };
 
         return (embeds.ToArray(), files);
+    }
+
+    // --- Width -------------------------------------------------------------------------------
+
+    /// <summary>Braille blank: drawn as nothing, but not whitespace, so Discord neither trims nor collapses it.</summary>
+    private const char Blank = '\u2800';
+
+    /// <summary>
+    /// Blanks in the last line of an embed: about the width of a desktop embed's text column, so
+    /// every embed stretches to the widest Discord draws. Fewer beside a thumbnail, which takes
+    /// part of that width. Tuned by eye in Discord.
+    /// </summary>
+    private const int PadWide = 56;
+    private const int PadBesideThumbnail = 45;
+
+    /// <summary><paramref name="text"/> with the line of blanks that widens its embed.</summary>
+    private static string Pad(string? text, bool thumbnail)
+    {
+        var line = new string(Blank, thumbnail ? PadBesideThumbnail : PadWide);
+        return string.IsNullOrEmpty(text) ? line : text + "\n" + line;
+    }
+
+    /// <summary><paramref name="text"/> without the line <see cref="Pad"/> added; null stays null.</summary>
+    private static string? Unpad(string? text)
+    {
+        if (text is null)
+            return null;
+
+        var trimmed = text.TrimEnd(Blank, '\n');
+        return trimmed;
     }
 
     /// <summary>The events embed's text: one entry per event of the week, then how to read the times.</summary>
@@ -279,7 +304,7 @@ public static partial class WeeklyMessage
 
     /// <summary>The events embed's text on a weekly, for comparing with a fresh one.</summary>
     public static string? CurrentEventsText(IMessage message) =>
-        message.Embeds.FirstOrDefault(e => e.Title == EventsTitle)?.Description;
+        Unpad(message.Embeds.FirstOrDefault(e => e.Title == EventsTitle)?.Description);
 
     // --- Footer: the posted weekly's issue and week ----------------------------------------------
 
