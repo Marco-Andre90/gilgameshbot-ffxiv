@@ -11,10 +11,11 @@ namespace GilgameshBot.Weekly;
 /// <param name="Approval">Where previews go: a text channel or a thread.</param>
 /// <param name="ApprovalHome">Where the previews' webhook lives, like <paramref name="WebhookHome"/>.</param>
 /// <param name="ApprovalThreadId">The approval thread, like <paramref name="ThreadId"/>.</param>
+/// <param name="Leader">The FC leader, who approves or rejects previews; a member of the weekly's server.</param>
 public sealed record WeeklyTarget(
     ITextChannel Announcement, IIntegrationChannel WebhookHome, ulong? ThreadId,
     ITextChannel Approval, IIntegrationChannel ApprovalHome, ulong? ApprovalThreadId,
-    IRole Role);
+    IUser Leader);
 
 /// <summary>Resolves the weekly's channels and role and checks everything it needs before any write.</summary>
 internal static class WeeklyChecks
@@ -26,9 +27,8 @@ internal static class WeeklyChecks
     /// <summary>
     /// The weekly's channels and role, or the reason they cannot be used: not set up, clashing
     /// with another feature's channel, missing, on different servers (or not on
-    /// <paramref name="guildId"/> when given), the bot lacking a permission, or a role the bot
-    /// cannot mention. Apollo channels must be on the same server, since the weekly reads its
-    /// events there.
+    /// <paramref name="guildId"/> when given), the bot lacking a permission, or no FC leader on the
+    /// server. Apollo channels must be on the same server, since the weekly reads its events there.
     /// </summary>
     public static async Task<(WeeklyTarget? Target, string? Problem)> ResolveAsync(
         DiscordSocketClient client, Configuration config, ulong? guildId, CancellationToken ct)
@@ -36,10 +36,13 @@ internal static class WeeklyChecks
         // Read once: the settings window and a configuration sync replace these from other threads.
         var channelId = config.WeeklyChannelId;
         var approvalId = config.WeeklyApprovalChannelId;
-        var roleId = config.WeeklyApproverRoleId;
+        var leaderId = config.FcLeaderId;
 
-        if (channelId == 0 || approvalId == 0 || roleId == 0)
+        if (channelId == 0 || approvalId == 0)
             return (null, "No weekly is set up. Fill in the Weekly Announcements tab and publish it.");
+
+        if (leaderId == 0)
+            return (null, "The weekly is approved by the FC leader: set the FC leader's Discord user ID on the Advanced tab and publish it.");
 
         if (config.WeeklyChannelProblem(channelId, approvalId) is { } clash)
             return (null, clash);
@@ -88,14 +91,9 @@ internal static class WeeklyChecks
         if (WebhookHome(client, approval) is not var (approvalHome, approvalThreadId))
             return (null, "The weekly's approval thread has no parent channel the bot can see.");
 
-        if (guild.GetRole(roleId) is not { } role)
-            return (null, "The weekly's approver role was not found on its server.");
-
-        // A webhook only notifies a role that anyone may mention; otherwise the preview would name
-        // the role without notifying anybody.
-        if (!role.IsMentionable)
-            return (null, $"The bot cannot notify @{role.Name}: turn on \"Allow anyone to @mention this role\" for it "
-                          + "(Server Settings → Roles).");
+        // Over REST: without the members intent the cache does not hold the server's members.
+        if (await client.Rest.GetGuildUserAsync(guild.Id, leaderId, options) is not { } leader)
+            return (null, "The FC leader (Advanced tab) is not a member of the weekly's server.");
 
         foreach (var id in config.ApolloChannelIds.ToList())
         {
@@ -103,7 +101,7 @@ internal static class WeeklyChecks
                 return (null, "The weekly reads its events from the calendar's Apollo channels, which must be on the weekly's server.");
         }
 
-        return (new WeeklyTarget(announcement, home, threadId, approval, approvalHome, approvalThreadId, role), null);
+        return (new WeeklyTarget(announcement, home, threadId, approval, approvalHome, approvalThreadId, leader), null);
     }
 
     /// <summary>

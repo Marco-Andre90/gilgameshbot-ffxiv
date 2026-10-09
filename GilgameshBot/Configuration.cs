@@ -224,6 +224,14 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>True when there is a calendar: a calendar channel and at least one Apollo channel.</summary>
     public bool IsCalendarConfigured => CalendarChannelId != 0 && ApolloChannelIds.Count > 0;
 
+    // --- FC leader ---
+
+    /// <summary>
+    /// Discord user ID of the Free Company leader: whoever has the last word where a feature asks
+    /// for approval (the weekly's previews). 0 when not set. Shared like the branches.
+    /// </summary>
+    public ulong FcLeaderId { get; set; }
+
     // --- Weekly announcement ---
 
     /// <summary>
@@ -236,8 +244,6 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Channel where a weekly is written and previewed, and approved or rejected, before it goes out.</summary>
     public ulong WeeklyApprovalChannelId { get; set; }
 
-    /// <summary>Role that is mentioned on every preview, and whose members may approve or reject it.</summary>
-    public ulong WeeklyApproverRoleId { get; set; }
 
     /// <summary>
     /// Personal: a weekly started from this plugin's settings window is a draft — previewed
@@ -245,8 +251,8 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public bool WeeklyDraftMode { get; set; }
 
-    /// <summary>True when there is a weekly: an announcement channel, an approval channel and an approver role.</summary>
-    public bool IsWeeklyConfigured => WeeklyChannelId != 0 && WeeklyApprovalChannelId != 0 && WeeklyApproverRoleId != 0;
+    /// <summary>True when there is a weekly: an announcement channel and an approval channel. Approvals go to <see cref="FcLeaderId"/>.</summary>
+    public bool IsWeeklyConfigured => WeeklyChannelId != 0 && WeeklyApprovalChannelId != 0;
 
     /// <summary>True when <paramref name="channelId"/> is the weekly's announcement or approval channel.</summary>
     public bool IsWeeklyChannel(ulong channelId) =>
@@ -277,7 +283,6 @@ public sealed class Configuration : IPluginConfiguration
         {
             WeeklyChannelId = 0;
             WeeklyApprovalChannelId = 0;
-            WeeklyApproverRoleId = 0;
         }
     }
 

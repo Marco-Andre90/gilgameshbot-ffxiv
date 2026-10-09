@@ -45,8 +45,8 @@ public sealed class SharedConfigFile
     public string? ApolloChannels { get; set; }
 
     /// <summary>
-    /// True on files from plugins that know the weekly settings, like <see cref="CarriesCalendar"/>:
-    /// without it the local weekly settings are kept.
+    /// True on files from plugins that know the weekly settings and the FC leader, like
+    /// <see cref="CarriesCalendar"/>: without it the local ones are kept.
     /// </summary>
     [JsonPropertyName("weekly")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -60,14 +60,15 @@ public sealed class SharedConfigFile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WeeklyApproval { get; set; }
 
-    [JsonPropertyName("weeklyRole")]
+    [JsonPropertyName("fcLeader")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? WeeklyRole { get; set; }
+    public string? FcLeader { get; set; }
 
     // Parsed, filled in by TryParse.
     [JsonIgnore] public ulong CalendarChannelId { get; set; }
     [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
     [JsonIgnore] public WeeklyIds Weekly { get; set; } = WeeklyIds.None;
+    [JsonIgnore] public ulong FcLeaderId { get; set; }
 }
 
 /// <summary>What to tell the officer after publishing. Fixed text plus names from the config.</summary>
@@ -174,7 +175,8 @@ public static class SharedConfig
 
         (parsed.Heartbeat, parsed.Stale) = SetupCode.ClampTimers(parsed.Heartbeat, parsed.Stale);
         (parsed.CalendarChannelId, parsed.ApolloChannelIds) = SetupCode.ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
-        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!);
+        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.Branches!);
+        parsed.FcLeaderId = SetupCode.ParseLeader(parsed.FcLeader);
 
         var by = (parsed.PublishedBy ?? string.Empty).Trim();
         parsed.PublishedBy = by.Length > 100 ? by[..100] : by;
@@ -253,7 +255,10 @@ public static class SharedConfig
 
         // The weekly likewise: absent from an older plugin's file means "unknown", not "removed".
         if (file.CarriesWeekly == true)
+        {
             SetupCode.ApplyWeekly(file.Weekly, config);
+            config.FcLeaderId = file.FcLeaderId;
+        }
 
         config.DropClashingWeekly();
 
@@ -344,7 +349,7 @@ public static class SharedConfig
                 CarriesWeekly = true,
                 WeeklyChannel = SetupCode.FormatWeekly(config).Channel,
                 WeeklyApproval = SetupCode.FormatWeekly(config).Approval,
-                WeeklyRole = SetupCode.FormatWeekly(config).Role,
+                FcLeader = SetupCode.FormatLeader(config),
             };
 
             // Checked exactly as a reader will check it: a file that other plugins would ignore

@@ -92,12 +92,17 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool weeklyBuffersLoaded;
     private string weeklyChannelIdBuffer = string.Empty;
     private string weeklyApprovalIdBuffer = string.Empty;
-    private string weeklyRoleIdBuffer = string.Empty;
     private string? weeklyMessage;
     private bool weeklyMessageIsWarning;
     private string? weeklySaveMessage;
     private bool weeklySaveMessageIsWarning;
     private Task<WeeklyOutcome>? weeklyStart;
+
+    // FC leader (Advanced tab): its edit buffer, filled like the others, and the save outcome.
+    private bool leaderBufferLoaded;
+    private string leaderIdBuffer = string.Empty;
+    private string? leaderMessage;
+    private bool leaderMessageIsWarning;
 
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
@@ -898,7 +903,7 @@ public sealed class ConfigWindow : Window, IDisposable
         // Outside the disabled scope, so the explanation still works while the button is greyed out.
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Makes your Free Company branches (roster, calendar and weekly settings included) and timers the configuration every member's "
+            "Makes your Free Company branches (roster, calendar and weekly settings and the FC leader included) and timers the configuration every member's "
             + "plugin follows. It is kept in each branch's state channel; the bot token is not part of it.\n\n"
             + "Plugins check when they connect and take over a newer revision, replacing their own branch table. "
             + "Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
@@ -972,6 +977,7 @@ public sealed class ConfigWindow : Window, IDisposable
         rosterBranch = -1;
         calendarBuffersLoaded = false;
         weeklyBuffersLoaded = false;
+        leaderBufferLoaded = false;
     }
 
     // --- FC roster tab ----------------------------------------------------------------------
@@ -1441,18 +1447,17 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiHelpers.ScaledDummy(4);
 
         TextWrappedColoured(Grey,
-            "The Fat Cat Weekly: officers write it in a Discord form, the approver role reviews a preview in the approval "
+            "The Fat Cat Weekly: officers write it in a Discord form, the FC leader (Advanced tab) reviews a preview in the approval "
             + "channel, and Approve posts it in the announcement channel as \"The Fat Cat Weekly\". This week's events come from "
             + "the calendar's Apollo channels and stay current while the week lasts. Officers can also start it with /weekly in Discord.");
         ImGuiHelpers.ScaledDummy(6);
 
-        SectionHeader("Channels and role");
+        SectionHeader("Channels");
 
         if (!weeklyBuffersLoaded)
         {
             weeklyChannelIdBuffer = config.WeeklyChannelId == 0 ? string.Empty : config.WeeklyChannelId.ToString();
             weeklyApprovalIdBuffer = config.WeeklyApprovalChannelId == 0 ? string.Empty : config.WeeklyApprovalChannelId.ToString();
-            weeklyRoleIdBuffer = config.WeeklyApproverRoleId == 0 ? string.Empty : config.WeeklyApproverRoleId.ToString();
             weeklyBuffersLoaded = true;
         }
 
@@ -1460,7 +1465,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
             "Where the weekly is posted. The bot creates a webhook there named The Fat Cat Weekly, so it needs Manage Webhooks "
-            + "and Read Message History. A text channel, not a thread, on the calendar's server.");
+            + "and Read Message History (for a thread, in its parent channel). A text channel or a thread on the calendar's server.");
 
         ImGui.InputText("Approval channel ID", ref weeklyApprovalIdBuffer, 32);
         ImGui.SameLine();
@@ -1468,11 +1473,9 @@ public sealed class ConfigWindow : Window, IDisposable
             "Where previews wait for approval, and where Start weekly posts its button. Best kept for officers; it may be the announcement channel. Previews go out through a webhook "
             + "there too, so the bot needs View Channel, Manage Webhooks, Send Messages, Embed Links, Attach Files and Read Message History.");
 
-        ImGui.InputText("Approver role ID", ref weeklyRoleIdBuffer, 32);
-        ImGui.SameLine();
-        ImGuiComponents.HelpMarker(
-            "Mentioned on every preview; its members approve or reject it. Turn on \"Allow anyone to @mention this role\" "
-            + "for it. Copy its ID with Developer Mode on: Server Settings → Roles → right-click the role.");
+        TextColoured(Grey, config.FcLeaderId != 0
+            ? "Previews are approved by the FC leader set on the Advanced tab."
+            : "Set the FC leader on the Advanced tab: previews are approved by them.");
 
         ImGuiHelpers.ScaledDummy(4);
 
@@ -1515,7 +1518,7 @@ public sealed class ConfigWindow : Window, IDisposable
             + "FC news, notes from the officers and The Fat Cat says. Needs the plugin connected.");
 
         if (!config.IsWeeklyConfigured)
-            TextColoured(Grey, "Save the announcement channel, approval channel and approver role first.");
+            TextColoured(Grey, "Save the announcement and approval channels first.");
         else if (!plugin.Bridge.CanStartWeekly)
             TextColoured(Grey, "Connect first.");
 
@@ -1530,10 +1533,10 @@ public sealed class ConfigWindow : Window, IDisposable
     {
         weeklySaveMessageIsWarning = true;
 
-        var ids = new ulong[3];
-        var buffers = new[] { weeklyChannelIdBuffer, weeklyApprovalIdBuffer, weeklyRoleIdBuffer };
-        var names = new[] { "Announcement channel ID", "Approval channel ID", "Approver role ID" };
-        for (var i = 0; i < 3; i++)
+        var ids = new ulong[2];
+        var buffers = new[] { weeklyChannelIdBuffer, weeklyApprovalIdBuffer };
+        var names = new[] { "Announcement channel ID", "Approval channel ID" };
+        for (var i = 0; i < ids.Length; i++)
         {
             if (buffers[i].Trim().Length > 0 && (!ulong.TryParse(buffers[i].Trim(), out ids[i]) || ids[i] == 0))
             {
@@ -1542,17 +1545,16 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
 
-        // All three, or none to turn the weekly off; anything in between is a mistake, and the
-        // fields stay as typed so it can be fixed.
+        // Both, or none to turn the weekly off; one alone is a mistake, and the fields stay as
+        // typed so it can be fixed.
         var filled = ids.Count(id => id != 0);
-        if (filled is 1 or 2)
+        if (filled == 1)
         {
-            weeklySaveMessage = $"Fill in {string.Join(" and ", names.Where((_, i) => ids[i] == 0))} too, "
-                                + "or empty all three to turn the weekly off. Nothing was saved.";
+            weeklySaveMessage = $"Fill in {names[Array.IndexOf(ids, 0UL)]} too, or empty both to turn the weekly off. Nothing was saved.";
             return;
         }
 
-        var configured = filled == 3;
+        var configured = filled == 2;
         if (configured && config.WeeklyChannelProblem(ids[0], ids[1]) is { } problem)
         {
             weeklySaveMessage = problem + " Nothing was saved.";
@@ -1561,7 +1563,6 @@ public sealed class ConfigWindow : Window, IDisposable
 
         config.WeeklyChannelId = ids[0];
         config.WeeklyApprovalChannelId = ids[1];
-        config.WeeklyApproverRoleId = ids[2];
         config.Save();
         weeklyBuffersLoaded = false;
 
@@ -1585,6 +1586,48 @@ public sealed class ConfigWindow : Window, IDisposable
 
         weeklyMessage = outcome.Message;
         weeklyMessageIsWarning = !outcome.Ok;
+    }
+
+    /// <summary>The FC leader: whoever approves what needs approving (the weekly's previews). Shared like the branches.</summary>
+    private void DrawFcLeader()
+    {
+        SectionHeader("FC leader");
+
+        if (!leaderBufferLoaded)
+        {
+            leaderIdBuffer = config.FcLeaderId == 0 ? string.Empty : config.FcLeaderId.ToString();
+            leaderBufferLoaded = true;
+        }
+
+        ImGui.InputText("FC leader ID", ref leaderIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The FC leader's Discord user ID. Features that need an approval ask the leader: the weekly's previews mention them, "
+            + "and only they can approve or reject one. Copy it with Developer Mode on: right-click the leader → Copy User ID. "
+            + "Part of the shared configuration: publish it to share it.");
+
+        if (ImGui.Button("Save FC leader", ImGuiHelpers.ScaledVector2(180, 0)))
+        {
+            leaderMessageIsWarning = true;
+            var text = leaderIdBuffer.Trim();
+            if (text.Length > 0 && (!ulong.TryParse(text, out var id) || id == 0))
+            {
+                leaderMessage = "FC leader ID must be a number.";
+            }
+            else
+            {
+                config.FcLeaderId = text.Length > 0 ? ulong.Parse(text) : 0;
+                config.Save();
+                leaderBufferLoaded = false;
+                leaderMessage = config.FcLeaderId != 0
+                    ? "Saved. Publish it to share it."
+                    : "Saved: no FC leader, so nothing can be approved.";
+                leaderMessageIsWarning = config.FcLeaderId == 0;
+            }
+        }
+
+        if (leaderMessage is { } msg)
+            TextWrappedColoured(leaderMessageIsWarning ? Yellow : Green, msg);
     }
 
     private void DrawBehaviourSettings()
@@ -1650,6 +1693,9 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiHelpers.ScaledDummy(6);
 
         DrawSharedConfig();
+        SectionGap();
+
+        DrawFcLeader();
         SectionGap();
 
         SectionHeader("Timers");

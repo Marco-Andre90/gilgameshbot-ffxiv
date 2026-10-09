@@ -342,11 +342,11 @@ public static partial class WeeklyMessage
     }
 
     /// <summary>The preview's text: whose it is, who should review it, and an early-issue warning.</summary>
-    public static string PreviewText(int number, IUser author, IRole? role, string? warning)
+    public static string PreviewText(int number, IUser author, IUser? leader, string? warning)
     {
-        var text = role is null
+        var text = leader is null
             ? $"📝 **Draft** · Issue No. {number}, by {author.Mention}. Draft mode: nothing is posted and nobody is notified. Delete it when you are done."
-            : $"📰 **Preview** · Issue No. {number}, written by {author.Mention}. {role.Mention}, please review: "
+            : $"📰 **Preview** · Issue No. {number}, written by {author.Mention}. {leader.Mention}, please review: "
               + "**Approve** posts it, **Reject** cancels it.";
 
         return warning is null ? text : $"{text}\n⚠️ {warning}";

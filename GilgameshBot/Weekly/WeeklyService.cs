@@ -14,7 +14,7 @@ public sealed record WeeklyOutcome(bool Ok, string Message);
 
 /// <summary>
 /// The Fat Cat Weekly on this session's server: written in a form, previewed in the approval
-/// channel, approved by the approver role, posted through the bot's webhook in the announcement
+/// channel, approved by the FC leader, posted through the bot's webhook in the announcement
 /// channel, and its events kept current every hour.
 /// </summary>
 /// <remarks>
@@ -202,7 +202,8 @@ public sealed class WeeklyService
                 warning = WeeklyMessage.EarlyWarning(last, lastIssue, now, discord: true);
 
                 var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(sections), issue, now, ct);
-                var allowed = draft ? AllowedMentions.None : new AllowedMentions { RoleIds = [target.Role.Id] };
+                // Exactly the FC leader, and nobody at all for a draft.
+                var allowed = draft ? AllowedMentions.None : new AllowedMentions { UserIds = [target.Leader.Id] };
 
                 // Through the webhook, so the preview is exactly what will go out, name and icon included.
                 var webhook = await WebhookAsync(target.ApprovalHome, create: true, options)
@@ -214,7 +215,7 @@ public sealed class WeeklyService
                 {
                     using var hook = new DiscordWebhookClient(webhook);
                     previewId = await hook.SendFilesAsync(attachments,
-                        WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Role, warning),
+                        WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Leader, warning),
                         embeds: embeds, username: WeeklyMessage.Name, avatarUrl: webhook.GetAvatarUrl(), options: options,
                         allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id),
                         threadId: target.ApprovalThreadId);
@@ -316,14 +317,16 @@ public sealed class WeeklyService
                 return;
             }
 
-            var roleId = config.WeeklyApproverRoleId;
-            var isApprover = component.User is IGuildUser member && member.RoleIds.Contains(roleId);
+            var leaderId = config.FcLeaderId;
+            var isApprover = leaderId != 0 && component.User.Id == leaderId;
 
             if (id is WeeklyMessage.ApproveId or WeeklyMessage.RejectId)
             {
                 if (!isApprover)
                 {
-                    await component.RespondAsync($"Only members with <@&{roleId}> can approve or reject the weekly.",
+                    await component.RespondAsync(leaderId != 0
+                            ? $"Only the FC leader, <@{leaderId}>, can approve or reject the weekly."
+                            : "No FC leader is set (plugin's Advanced tab), so nobody can approve or reject the weekly.",
                         ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
                     return;
                 }
@@ -338,7 +341,7 @@ public sealed class WeeklyService
             {
                 if (component.User.Id != author && !isApprover)
                 {
-                    await component.RespondAsync($"Only the draft's author or members with <@&{roleId}> can delete it.",
+                    await component.RespondAsync("Only the draft's author or the FC leader can delete it.",
                         ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
                     return;
                 }
