@@ -484,15 +484,14 @@ public static class SetupCode
     /// <summary>
     /// The weekly settings from a setup code or the shared configuration; <see cref="WeeklyIds.None"/>
     /// when they are missing or malformed, or when a channel is any branch's relay, state or roster
-    /// channel, the calendar channel or an Apollo channel, or both channels are the same.
+    /// channel, the calendar channel or an Apollo channel. Both may be the same channel.
     /// </summary>
     internal static WeeklyIds ParseWeekly(
         string? channel, string? approval, string? role, List<SetupBranch> branches, ulong calendarChannel, List<ulong> apollo)
     {
         if (!ulong.TryParse(channel, out var channelId) || channelId == 0
             || !ulong.TryParse(approval, out var approvalId) || approvalId == 0
-            || !ulong.TryParse(role, out var roleId) || roleId == 0
-            || channelId == approvalId)
+            || !ulong.TryParse(role, out var roleId) || roleId == 0)
             return WeeklyIds.None;
 
         foreach (var id in new[] { channelId, approvalId })

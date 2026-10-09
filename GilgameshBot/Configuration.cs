@@ -254,14 +254,11 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>
     /// Why <paramref name="announcement"/> and <paramref name="approval"/> cannot be the weekly's
-    /// channels, or null when they can. The weekly writes and deletes the bot's messages there, and
-    /// a preview in the announcement channel would be public.
+    /// channels, or null when they can. The weekly writes and deletes the bot's messages there. Both
+    /// may be the same channel: previews then show where the weekly goes out.
     /// </summary>
     public string? WeeklyChannelProblem(ulong announcement, ulong approval)
     {
-        if (announcement == approval)
-            return "The announcement and approval channels must be different channels.";
-
         var apollo = ApolloChannelIds.ToList();
         foreach (var id in new[] { announcement, approval })
         {

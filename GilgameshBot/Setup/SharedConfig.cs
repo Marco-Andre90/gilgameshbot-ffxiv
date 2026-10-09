@@ -361,8 +361,8 @@ public static class SharedConfig
 
             if (config.IsWeeklyConfigured && check.Weekly == WeeklyIds.None)
                 return new SharedConfigOutcome(false,
-                    "The weekly's channels must be two different channels, and neither the calendar channel, an Apollo channel "
-                    + "nor any branch's relay, state or roster channel. Nothing was published.");
+                    "The weekly's channels must be neither the calendar channel, an Apollo channel nor any branch's relay, "
+                    + "state or roster channel. Nothing was published.");
 
             var failed = new List<string>();
             foreach (var channel in channels)

@@ -1470,7 +1470,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.InputText("Approval channel ID", ref weeklyApprovalIdBuffer, 32);
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Where previews wait for approval, and where Start weekly posts its button. Keep it for officers. The bot needs "
+            "Where previews wait for approval, and where Start weekly posts its button. Best kept for officers; it may be the announcement channel. The bot needs "
             + "View Channel, Send Messages, Embed Links, Attach Files and Read Message History there.");
 
         ImGui.InputText("Approver role ID", ref weeklyRoleIdBuffer, 32);
