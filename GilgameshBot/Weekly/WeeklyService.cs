@@ -81,6 +81,7 @@ public sealed class WeeklyService
             var (last, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
 
             var (text, components) = WeeklyMessage.FillPrompt(who, draft);
+            await CalendarChannels.ReopenAsync(target.Approval, options);
             await target.Approval.SendMessageAsync(text, components: components, allowedMentions: AllowedMentions.None, options: options);
 
             var message = $"Posted \"Write the weekly\" in #{target.Approval.Name}. Click it in Discord to fill in the weekly.";
@@ -203,6 +204,7 @@ public sealed class WeeklyService
                 var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(sections), issue, now, ct);
                 var allowed = draft ? AllowedMentions.None : new AllowedMentions { RoleIds = [target.Role.Id] };
 
+                await CalendarChannels.ReopenAsync(target.Approval, options);
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
@@ -433,7 +435,7 @@ public sealed class WeeklyService
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
                 var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), issue, now, ct);
 
-                var webhook = await WebhookAsync(target.Announcement, create: true, options)
+                var webhook = await WebhookAsync(target.WebhookHome, create: true, options)
                               ?? throw new InvalidOperationException("The webhook could not be created.");
 
                 // Last look before sending: building took a few seconds.
@@ -491,9 +493,10 @@ public sealed class WeeklyService
                     // Not cancelled by a disconnect: a send cut off halfway may still have gone out.
                     using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     using var hook = new DiscordWebhookClient(webhook);
+                    await CalendarChannels.ReopenAsync(target.Announcement, new RequestOptions { CancelToken = sendCts.Token });
                     postedId = await hook.SendFilesAsync(attachments, text: null, embeds: embeds, username: WeeklyMessage.Name,
                         avatarUrl: webhook.GetAvatarUrl(), options: new RequestOptions { CancelToken = sendCts.Token },
-                        allowedMentions: AllowedMentions.None);
+                        allowedMentions: AllowedMentions.None, threadId: target.ThreadId);
                 }
                 finally
                 {
@@ -703,7 +706,7 @@ public sealed class WeeklyService
                     return;
 
                 // Only a weekly the bot's own webhook posted can be edited.
-                var webhook = (await BotWebhooksAsync(target.Announcement, options)).FirstOrDefault(h => h.Id == last.Author.Id);
+                var webhook = (await BotWebhooksAsync(target.WebhookHome, options)).FirstOrDefault(h => h.Id == last.Author.Id);
                 if (webhook is null)
                     return;
 
@@ -716,12 +719,13 @@ public sealed class WeeklyService
                 try
                 {
                     using var hook = new DiscordWebhookClient(webhook);
+                    await CalendarChannels.ReopenAsync(target.Announcement, options);
                     await hook.ModifyMessageAsync(last.Id, p =>
                     {
                         p.Embeds = embeds;
                         p.Attachments = attachments;
                         p.AllowedMentions = AllowedMentions.None;
-                    }, options);
+                    }, options, target.ThreadId);
                 }
                 finally
                 {
@@ -791,7 +795,7 @@ public sealed class WeeklyService
     /// when missing (named The Fat Cat Weekly, with the Fat Cat icon) and its name and avatar are
     /// put back when someone removed them; without, null when there is none.
     /// </summary>
-    private async Task<IWebhook?> WebhookAsync(ITextChannel channel, bool create, RequestOptions options)
+    private async Task<IWebhook?> WebhookAsync(IIntegrationChannel channel, bool create, RequestOptions options)
     {
         var ours = (await BotWebhooksAsync(channel, options))
             .OrderByDescending(h => h.Name == WeeklyMessage.Name)
@@ -822,7 +826,7 @@ public sealed class WeeklyService
     }
 
     /// <summary>The webhooks the bot created in <paramref name="channel"/> and can post with.</summary>
-    private async Task<List<IWebhook>> BotWebhooksAsync(ITextChannel channel, RequestOptions options)
+    private async Task<List<IWebhook>> BotWebhooksAsync(IIntegrationChannel channel, RequestOptions options)
     {
         var botId = client.CurrentUser.Id;
         return (await channel.GetWebhooksAsync(options))

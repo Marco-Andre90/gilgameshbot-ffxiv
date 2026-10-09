@@ -5,7 +5,10 @@ using GilgameshBot.Calendar;
 namespace GilgameshBot.Weekly;
 
 /// <summary>The weekly's channels and role, resolved and checked.</summary>
-public sealed record WeeklyTarget(ITextChannel Announcement, ITextChannel Approval, IRole Role);
+/// <param name="Announcement">Where the weekly goes out: a text channel or a thread.</param>
+/// <param name="WebhookHome">Where its webhook lives: the announcement channel, or a thread's parent.</param>
+/// <param name="ThreadId">The announcement thread the webhook posts into; null for a plain channel.</param>
+public sealed record WeeklyTarget(ITextChannel Announcement, IIntegrationChannel WebhookHome, ulong? ThreadId, ITextChannel Approval, IRole Role);
 
 /// <summary>Resolves the weekly's channels and role and checks everything it needs before any write.</summary>
 internal static class WeeklyChecks
@@ -16,7 +19,7 @@ internal static class WeeklyChecks
 
     /// <summary>
     /// The weekly's channels and role, or the reason they cannot be used: not set up, clashing
-    /// with another feature's channel, missing, a thread, on different servers (or not on
+    /// with another feature's channel, missing, on different servers (or not on
     /// <paramref name="guildId"/> when given), the bot lacking a permission, or a role the bot
     /// cannot mention. Apollo channels must be on the same server, since the weekly reads its
     /// events there.
@@ -45,9 +48,6 @@ internal static class WeeklyChecks
         if (approval is null)
             return (null, "The weekly's approval channel was not found, or the bot cannot see it.");
 
-        if (announcement is IThreadChannel || approval is IThreadChannel)
-            return (null, "The weekly's channels must be text channels, not threads.");
-
         if (announcement.GuildId != approval.GuildId)
             return (null, "The weekly's announcement and approval channels must be on the same server.");
 
@@ -57,12 +57,34 @@ internal static class WeeklyChecks
         if (client.GetGuild(announcement.GuildId) is not { } guild)
             return (null, "The bot is not a member of the weekly's server.");
 
+        // Either may be a thread: permissions are its parent's, and a webhook belongs to the parent
+        // channel and posts into the thread.
         if (CalendarChannels.Permissions(client, announcement) is not { ViewChannel: true, ManageWebhooks: true, ReadMessageHistory: true })
-            return (null, "The bot needs View Channel, Manage Webhooks and Read Message History in the weekly's announcement channel.");
+            return (null, "The bot needs View Channel, Manage Webhooks and Read Message History in the weekly's announcement channel "
+                          + "(for a thread, in its parent channel).");
+
+        IIntegrationChannel? home = announcement as IIntegrationChannel;
+        ulong? threadId = null;
+        if (announcement is IThreadChannel thread)
+        {
+            var parentId = thread switch
+            {
+                SocketThreadChannel { ParentChannel: { } p } => p.Id,
+                Discord.Rest.RestThreadChannel rest => rest.ParentChannelId,
+                _ => 0UL,
+            };
+            home = client.GetChannel(parentId) as IIntegrationChannel;
+            threadId = thread.Id;
+        }
+
+        if (home is null)
+            return (null, "The weekly's announcement thread has no parent channel the bot can see.");
 
         if (CalendarChannels.Permissions(client, approval) is not { } perms
-            || !perms.ViewChannel || !perms.SendMessages || !perms.EmbedLinks || !perms.AttachFiles || !perms.ReadMessageHistory)
-            return (null, "The bot needs View Channel, Send Messages, Embed Links, Attach Files and Read Message History in the weekly's approval channel.");
+            || !perms.ViewChannel || !CalendarChannels.CanSend(approval, perms) || !perms.EmbedLinks || !perms.AttachFiles
+            || !perms.ReadMessageHistory)
+            return (null, "The bot needs View Channel, Send Messages (Send Messages in Threads for a thread), Embed Links, Attach Files "
+                          + "and Read Message History in the weekly's approval channel.");
 
         if (guild.GetRole(roleId) is not { } role)
             return (null, "The weekly's approver role was not found on its server.");
@@ -78,6 +100,6 @@ internal static class WeeklyChecks
                 return (null, "The weekly reads its events from the calendar's Apollo channels, which must be on the weekly's server.");
         }
 
-        return (new WeeklyTarget(announcement, approval, role), null);
+        return (new WeeklyTarget(announcement, home, threadId, approval, role), null);
     }
 }
