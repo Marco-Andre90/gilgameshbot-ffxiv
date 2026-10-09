@@ -144,8 +144,8 @@ public sealed class CalendarService
     {
         // The update edits and deletes the bot's own messages here; in a relay, state or roster
         // channel those would be relayed chat, presence messages or roster reports.
-        if (config.IsRelayOrStateChannel(setup.ChannelId) || config.IsRosterChannel(setup.ChannelId) || config.IsWeeklyChannel(setup.ChannelId))
-            return new CalendarOutcome(false, "The calendar channel must not be any branch's relay, state or roster channel, nor a weekly channel.");
+        if (config.IsRelayOrStateChannel(setup.ChannelId) || config.IsRosterChannel(setup.ChannelId))
+            return new CalendarOutcome(false, "The calendar channel must not be any branch's relay, state or roster channel.");
 
         try
         {

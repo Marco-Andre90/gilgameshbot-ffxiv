@@ -174,8 +174,7 @@ public static class SharedConfig
 
         (parsed.Heartbeat, parsed.Stale) = SetupCode.ClampTimers(parsed.Heartbeat, parsed.Stale);
         (parsed.CalendarChannelId, parsed.ApolloChannelIds) = SetupCode.ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
-        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!,
-            parsed.CalendarChannelId, parsed.ApolloChannelIds);
+        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!);
 
         var by = (parsed.PublishedBy ?? string.Empty).Trim();
         parsed.PublishedBy = by.Length > 100 ? by[..100] : by;
@@ -361,8 +360,7 @@ public static class SharedConfig
 
             if (config.IsWeeklyConfigured && check.Weekly == WeeklyIds.None)
                 return new SharedConfigOutcome(false,
-                    "The weekly's channels must be neither the calendar channel, an Apollo channel nor any branch's relay, "
-                    + "state or roster channel. Nothing was published.");
+                    "The weekly's channels must not be any branch's relay, state or roster channel. Nothing was published.");
 
             var failed = new List<string>();
             foreach (var channel in channels)

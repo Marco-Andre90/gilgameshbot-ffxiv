@@ -1407,13 +1407,6 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        // The weekly writes in its channels too, and reads the Apollo channels.
-        if (config.IsWeeklyChannel(calendarChannelId) || apolloChannelIds.Any(config.IsWeeklyChannel))
-        {
-            calendarMessage = "The calendar and Apollo channels must not be the weekly's channels.";
-            return;
-        }
-
         config.CalendarChannelId = calendarChannelId;
         config.ApolloChannelIds = apolloChannelIds; // replaced, never mutated: background tasks read it
         config.Save();

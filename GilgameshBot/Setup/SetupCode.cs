@@ -301,8 +301,7 @@ public static class SetupCode
         // The same for the weekly.
         if (parsed.WeeklyChannel is not null)
         {
-            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!,
-                parsed.CalendarChannelId, parsed.ApolloChannelIds);
+            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyRole, parsed.Branches!);
         }
 
         payload = parsed;
@@ -484,10 +483,9 @@ public static class SetupCode
     /// <summary>
     /// The weekly settings from a setup code or the shared configuration; <see cref="WeeklyIds.None"/>
     /// when they are missing or malformed, or when a channel is any branch's relay, state or roster
-    /// channel, the calendar channel or an Apollo channel. Both may be the same channel.
+    /// channel (see <see cref="Configuration.WeeklyChannelProblem"/>).
     /// </summary>
-    internal static WeeklyIds ParseWeekly(
-        string? channel, string? approval, string? role, List<SetupBranch> branches, ulong calendarChannel, List<ulong> apollo)
+    internal static WeeklyIds ParseWeekly(string? channel, string? approval, string? role, List<SetupBranch> branches)
     {
         if (!ulong.TryParse(channel, out var channelId) || channelId == 0
             || !ulong.TryParse(approval, out var approvalId) || approvalId == 0
@@ -496,8 +494,7 @@ public static class SetupCode
 
         foreach (var id in new[] { channelId, approvalId })
         {
-            if (id == calendarChannel || apollo.Contains(id)
-                || branches.Any(b => b.ChannelId == id || b.StateChannelId == id || b.RosterChannelId == id))
+            if (branches.Any(b => b.ChannelId == id || b.StateChannelId == id || b.RosterChannelId == id))
                 return WeeklyIds.None;
         }
 

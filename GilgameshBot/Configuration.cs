@@ -254,19 +254,17 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>
     /// Why <paramref name="announcement"/> and <paramref name="approval"/> cannot be the weekly's
-    /// channels, or null when they can. The weekly writes and deletes the bot's messages there. Both
-    /// may be the same channel: previews then show where the weekly goes out.
+    /// channels, or null when they can. The weekly writes and deletes the bot's messages there, so
+    /// not in a relay, state or roster channel. Both may be the same channel, and either may be the
+    /// calendar channel or an Apollo channel: the calendar and the weekly only ever touch their own
+    /// messages (by custom id prefix and webhook), and Apollo channels are only read.
     /// </summary>
     public string? WeeklyChannelProblem(ulong announcement, ulong approval)
     {
-        var apollo = ApolloChannelIds.ToList();
         foreach (var id in new[] { announcement, approval })
         {
             if (IsRelayOrStateChannel(id) || IsRosterChannel(id))
                 return "The weekly's channels must not be any branch's relay, state or roster channel.";
-
-            if (IsCalendarChannel(id) || apollo.Contains(id))
-                return "The weekly's channels must not be the calendar channel or an Apollo channel.";
         }
 
         return null;
