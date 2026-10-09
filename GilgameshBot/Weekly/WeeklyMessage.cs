@@ -76,10 +76,10 @@ public static partial class WeeklyMessage
     private const string FooterPrefix = Name + " · Issue No. ";
 
     private static readonly Color HeaderColor = new(0xD9, 0x89, 0x3A);
-    private static readonly Color EventsColor = new(0x3B, 0xA5, 0x5D);
+    private static readonly Color EventsColor = new(0x9B, 0x7B, 0xEA);
     private static readonly Color GameColor = new(0x4F, 0x8E, 0xF7);
-    private static readonly Color FcColor = new(0xE0, 0xA4, 0x3A);
-    private static readonly Color NotesColor = new(0x9B, 0x7B, 0xEA);
+    private static readonly Color FcColor = new(0x9B, 0x7B, 0xEA);
+    private static readonly Color NotesColor = new(0xED, 0x42, 0x45);
 
     private static readonly string[] ManualTitles = [GameTitle, FcTitle, NotesTitle, SaysTitle];
 
