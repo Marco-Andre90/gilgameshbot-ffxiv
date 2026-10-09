@@ -1512,7 +1512,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
             "Posts a Write the weekly button in the approval channel. Click it in Discord to fill in the form: game news, "
-            + "FC news, Cat of the Week, notes from the officers and The Fat Cat says. Needs the plugin connected.");
+            + "FC news, notes from the officers and The Fat Cat says. Needs the plugin connected.");
 
         if (!config.IsWeeklyConfigured)
             TextColoured(Grey, "Save the announcement channel, approval channel and approver role first.");

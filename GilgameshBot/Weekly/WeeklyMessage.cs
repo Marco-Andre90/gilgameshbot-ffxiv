@@ -8,9 +8,9 @@ using GilgameshBot.Relay;
 namespace GilgameshBot.Weekly;
 
 /// <summary>What the officers wrote in the weekly's form. Empty strings for sections left blank.</summary>
-public sealed record WeeklySections(string GameNews, string FcNews, string CatOfTheWeek, string OfficerNotes, string FatCatSays)
+public sealed record WeeklySections(string GameNews, string FcNews, string OfficerNotes, string FatCatSays)
 {
-    public bool IsEmpty => new[] { GameNews, FcNews, CatOfTheWeek, OfficerNotes, FatCatSays }.All(s => s.Length == 0);
+    public bool IsEmpty => new[] { GameNews, FcNews, OfficerNotes, FatCatSays }.All(s => s.Length == 0);
 }
 
 /// <summary>Which issue a weekly is and the week it covers.</summary>
@@ -30,10 +30,10 @@ public sealed record WeeklyIssue(int Number, DateOnly First)
 /// </summary>
 /// <remarks>
 /// <para>
-/// The message is the header picture, as a plain attachment above everything, and five embeds:
-/// this week's events, game news, FC news (with the Cat of the Week), notes from the officers and
-/// "The Fat Cat says:" with the footer. Sections left blank are left out; the events and the last
-/// embed are always there.
+/// The message is the header picture, as a plain attachment above everything, and up to five
+/// embeds: this week's events, game news, FC news, notes from the officers and "The Fat Cat
+/// says:". Empty ones are left out: a week without events, a section left blank. The footer
+/// goes on the last embed there is.
 /// </para>
 /// <para>
 /// No state is kept anywhere else: the preview message carries the officers' sections, and the
@@ -56,16 +56,14 @@ public static partial class WeeklyMessage
 
     private const string GameField = "game";
     private const string FcField = "fc";
-    private const string CatField = "cat";
     private const string NotesField = "notes";
     private const string SaysField = "says";
 
     // The form's limits keep the whole message under Discord's 6000 characters across its embeds:
-    // these add up to 4000, the events take at most MaxEvents (+ one "…and N more" line), and the
+    // these add up to 3700, the events take at most MaxEvents (+ one "…and N more" line), and the
     // titles, labels and footer about 300 more.
     private const int MaxGame = 1000;
     private const int MaxFc = 1000;
-    private const int MaxCat = 300;
     private const int MaxNotes = 1200;
     private const int MaxSays = 500;
     private const int MaxEvents = 1400;
@@ -75,7 +73,6 @@ public static partial class WeeklyMessage
     private const string FcTitle = "FC news";
     private const string NotesTitle = "Notes from the officers";
     private const string SaysTitle = "The Fat Cat says:";
-    private const string CatLabel = "**Cat of the Week:** ";
     private const string FooterPrefix = Name + " · Issue No. ";
 
     private static readonly Color HeaderColor = new(0xD9, 0x89, 0x3A);
@@ -100,8 +97,6 @@ public static partial class WeeklyMessage
                 placeholder: "Patch, Live Letter or maintenance: a summary and a link to the official notes.", maxLength: MaxGame, required: false)
             .AddTextInput("FC news", FcField, TextInputStyle.Paragraph,
                 placeholder: "Welcome aboard, new members! Achievements, ranks, house news…", maxLength: MaxFc, required: false)
-            .AddTextInput("Cat of the Week", CatField, TextInputStyle.Short,
-                placeholder: "Member for reason", maxLength: MaxCat, required: false)
             .AddTextInput("Notes from the officers", NotesField, TextInputStyle.Paragraph,
                 placeholder: "Your notes. Sign them, e.g. \"From Name\".", maxLength: MaxNotes, required: false)
             .AddTextInput("The Fat Cat says", SaysField, TextInputStyle.Paragraph,
@@ -113,7 +108,7 @@ public static partial class WeeklyMessage
     {
         draft = false;
         fillMessageId = 0;
-        sections = new WeeklySections("", "", "", "", "");
+        sections = new WeeklySections("", "", "", "");
 
         if (!customId.StartsWith(ModalId, StringComparison.Ordinal))
             return false;
@@ -124,7 +119,7 @@ public static partial class WeeklyMessage
 
         draft = parts[0] == "1";
         sections = new WeeklySections(
-            Clean(value(GameField), MaxGame), Clean(value(FcField), MaxFc), Clean(value(CatField), MaxCat),
+            Clean(value(GameField), MaxGame), Clean(value(FcField), MaxFc),
             Clean(value(NotesField), MaxNotes), Clean(value(SaysField), MaxSays));
         return true;
     }
@@ -142,12 +137,12 @@ public static partial class WeeklyMessage
 
     /// <summary>The sections as text, to hand back to an officer when their weekly could not be previewed.</summary>
     public static string AsText(WeeklySections s) =>
-        $"Game news:\n{s.GameNews}\n\nFC news:\n{s.FcNews}\n\nCat of the Week:\n{s.CatOfTheWeek}\n\n"
+        $"Game news:\n{s.GameNews}\n\nFC news:\n{s.FcNews}\n\n"
         + $"Notes from the officers:\n{s.OfficerNotes}\n\nThe Fat Cat says:\n{s.FatCatSays}\n";
 
     // --- Embeds ---------------------------------------------------------------------------------
 
-    /// <summary>The officers' embeds: game news, FC news, notes, and "The Fat Cat says:" without its footer.</summary>
+    /// <summary>The officers' embeds that have text: game news, FC news, notes and "The Fat Cat says:".</summary>
     public static List<EmbedBuilder> Manual(WeeklySections s)
     {
         var embeds = new List<EmbedBuilder>();
@@ -155,19 +150,14 @@ public static partial class WeeklyMessage
         if (s.GameNews.Length > 0)
             embeds.Add(new EmbedBuilder().WithTitle(GameTitle).WithDescription(s.GameNews).WithColor(GameColor));
 
-        var fc = s.CatOfTheWeek.Length > 0
-            ? (s.FcNews.Length > 0 ? s.FcNews + "\n\n" : string.Empty) + CatLabel + s.CatOfTheWeek
-            : s.FcNews;
-        if (fc.Length > 0)
-            embeds.Add(new EmbedBuilder().WithTitle(FcTitle).WithDescription(fc).WithColor(FcColor));
+        if (s.FcNews.Length > 0)
+            embeds.Add(new EmbedBuilder().WithTitle(FcTitle).WithDescription(s.FcNews).WithColor(FcColor));
 
         if (s.OfficerNotes.Length > 0)
             embeds.Add(new EmbedBuilder().WithTitle(NotesTitle).WithDescription(s.OfficerNotes).WithColor(NotesColor));
 
-        var says = new EmbedBuilder().WithTitle(SaysTitle).WithColor(HeaderColor);
         if (s.FatCatSays.Length > 0)
-            says.WithDescription($"*“{s.FatCatSays}”*");
-        embeds.Add(says);
+            embeds.Add(new EmbedBuilder().WithTitle(SaysTitle).WithDescription($"*“{s.FatCatSays}”*").WithColor(HeaderColor));
 
         return embeds;
     }
@@ -191,10 +181,6 @@ public static partial class WeeklyMessage
             })
             .ToList();
 
-        // A message without the last embed is not one of ours; give it one so the footer has a home.
-        if (!embeds.Any(e => e.Title == SaysTitle))
-            embeds.Add(new EmbedBuilder().WithTitle(SaysTitle).WithColor(HeaderColor));
-
         return embeds;
     }
 
@@ -210,33 +196,38 @@ public static partial class WeeklyMessage
     public static (Embed[] Embeds, List<(string Name, byte[] Bytes)> Files) Assemble(
         List<EmbedBuilder> manual, WeeklyIssue issue, IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
     {
-        var embeds = new List<Embed>
-        {
-            new EmbedBuilder()
-                .WithTitle(EventsTitle)
-                .WithDescription(Pad(EventsText(events, from, guildId), thumbnail: true))
-                .WithColor(EventsColor)
-                .WithThumbnailUrl("attachment://" + WeeklyAssets.EventThumbnail)
-                .Build(),
-        };
+        var builders = new List<EmbedBuilder>();
+        if (EventsText(events, from, guildId) is { } eventsText)
+            builders.Add(new EmbedBuilder().WithTitle(EventsTitle).WithDescription(eventsText).WithColor(EventsColor));
 
-        foreach (var b in manual)
-        {
-            var says = b.Title == SaysTitle;
-            if (says)
-                b.WithThumbnailUrl("attachment://" + WeeklyAssets.Sticker).WithFooter(Footer(issue));
+        builders.AddRange(manual);
 
-            embeds.Add(b.WithDescription(Pad(b.Description, thumbnail: says)).Build());
+        // Every message needs one embed to carry the footer: an empty week still says so.
+        if (builders.Count == 0)
+            builders.Add(new EmbedBuilder().WithTitle(EventsTitle).WithDescription(NoEvents).WithColor(EventsColor));
+
+        // The pictures go with their sections; the footer with whatever comes last.
+        foreach (var b in builders)
+        {
+            if (b.Title == GameTitle)
+                b.WithThumbnailUrl("attachment://" + WeeklyAssets.EventThumbnail);
+            else if (b.Title == SaysTitle)
+                b.WithThumbnailUrl("attachment://" + WeeklyAssets.Sticker);
         }
 
-        var files = new List<(string, byte[])>
-        {
-            (WeeklyHeader.FileName, WeeklyHeader.Render(issue.Number, issue.First, issue.Last)),
-            (WeeklyAssets.EventThumbnail, WeeklyAssets.Get(WeeklyAssets.EventThumbnail)),
-            (WeeklyAssets.Sticker, WeeklyAssets.Get(WeeklyAssets.Sticker)),
-        };
+        builders[^1].WithFooter(Footer(issue));
 
-        return (embeds.ToArray(), files);
+        var embeds = builders
+            .Select(b => b.WithDescription(Pad(b.Description, thumbnail: b.ThumbnailUrl is not null)).Build())
+            .ToArray();
+
+        var files = new List<(string, byte[])> { (WeeklyHeader.FileName, WeeklyHeader.Render(issue.Number, issue.First, issue.Last)) };
+        if (builders.Any(b => b.Title == GameTitle))
+            files.Add((WeeklyAssets.EventThumbnail, WeeklyAssets.Get(WeeklyAssets.EventThumbnail)));
+        if (builders.Any(b => b.Title == SaysTitle))
+            files.Add((WeeklyAssets.Sticker, WeeklyAssets.Get(WeeklyAssets.Sticker)));
+
+        return (embeds, files);
     }
 
     // --- Width -------------------------------------------------------------------------------
@@ -269,8 +260,13 @@ public static partial class WeeklyMessage
         return trimmed;
     }
 
-    /// <summary>The events embed's text: one entry per event of the week, then how to read the times.</summary>
-    public static string EventsText(IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
+    private const string NoEvents = "No events this week yet. Events created with Apollo show up on the calendar.";
+
+    /// <summary>
+    /// The events embed's text: one entry per event of the week, then how to read the times. Null
+    /// for a week without events: the embed is left out.
+    /// </summary>
+    public static string? EventsText(IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
     {
         var until = from.AddDays(7);
         var week = events
@@ -279,7 +275,7 @@ public static partial class WeeklyMessage
             .ToList();
 
         if (week.Count == 0)
-            return "No events this week yet. Events created with Apollo show up on the calendar.";
+            return null;
 
         var text = new StringBuilder();
         for (var i = 0; i < week.Count; i++)
@@ -302,9 +298,9 @@ public static partial class WeeklyMessage
         return text.ToString();
     }
 
-    /// <summary>The events embed's text on a weekly, for comparing with a fresh one.</summary>
+    /// <summary>The events embed's text on a weekly, for comparing with a fresh one; null without events.</summary>
     public static string? CurrentEventsText(IMessage message) =>
-        Unpad(message.Embeds.FirstOrDefault(e => e.Title == EventsTitle)?.Description);
+        Unpad(message.Embeds.FirstOrDefault(e => e.Title == EventsTitle)?.Description) is { } text && text != NoEvents ? text : null;
 
     // --- Footer: the posted weekly's issue and week ----------------------------------------------
 
