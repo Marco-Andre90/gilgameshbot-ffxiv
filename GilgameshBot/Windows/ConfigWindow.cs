@@ -95,6 +95,8 @@ public sealed class ConfigWindow : Window, IDisposable
     private string weeklyRoleIdBuffer = string.Empty;
     private string? weeklyMessage;
     private bool weeklyMessageIsWarning;
+    private string? weeklySaveMessage;
+    private bool weeklySaveMessageIsWarning;
     private Task<WeeklyOutcome>? weeklyStart;
 
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
@@ -1484,6 +1486,10 @@ public sealed class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Save weekly settings", ImGuiHelpers.ScaledVector2(180, 0)))
             SaveWeeklySettings();
 
+        // Right under the button, where it is seen: the start's outcome is further down.
+        if (weeklySaveMessage is { } saved)
+            TextWrappedColoured(weeklySaveMessageIsWarning ? Yellow : Green, saved);
+
         SectionGap();
         SectionHeader("Start");
 
@@ -1529,38 +1535,47 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void SaveWeeklySettings()
     {
-        weeklyMessageIsWarning = true;
+        weeklySaveMessageIsWarning = true;
 
         var ids = new ulong[3];
         var buffers = new[] { weeklyChannelIdBuffer, weeklyApprovalIdBuffer, weeklyRoleIdBuffer };
         var names = new[] { "Announcement channel ID", "Approval channel ID", "Approver role ID" };
         for (var i = 0; i < 3; i++)
         {
-            if (buffers[i].Trim().Length > 0 && !ulong.TryParse(buffers[i].Trim(), out ids[i]))
+            if (buffers[i].Trim().Length > 0 && (!ulong.TryParse(buffers[i].Trim(), out ids[i]) || ids[i] == 0))
             {
-                weeklyMessage = $"{names[i]} must be a number.";
+                weeklySaveMessage = $"{names[i]} must be a number.";
                 return;
             }
         }
 
-        // Any empty field turns the weekly off.
-        var configured = ids.All(id => id != 0);
-        if (configured && config.WeeklyChannelProblem(ids[0], ids[1]) is { } problem)
+        // All three, or none to turn the weekly off; anything in between is a mistake, and the
+        // fields stay as typed so it can be fixed.
+        var filled = ids.Count(id => id != 0);
+        if (filled is 1 or 2)
         {
-            weeklyMessage = problem;
+            weeklySaveMessage = $"Fill in {string.Join(" and ", names.Where((_, i) => ids[i] == 0))} too, "
+                                + "or empty all three to turn the weekly off. Nothing was saved.";
             return;
         }
 
-        config.WeeklyChannelId = configured ? ids[0] : 0;
-        config.WeeklyApprovalChannelId = configured ? ids[1] : 0;
-        config.WeeklyApproverRoleId = configured ? ids[2] : 0;
+        var configured = filled == 3;
+        if (configured && config.WeeklyChannelProblem(ids[0], ids[1]) is { } problem)
+        {
+            weeklySaveMessage = problem + " Nothing was saved.";
+            return;
+        }
+
+        config.WeeklyChannelId = ids[0];
+        config.WeeklyApprovalChannelId = ids[1];
+        config.WeeklyApproverRoleId = ids[2];
         config.Save();
         weeklyBuffersLoaded = false;
 
-        weeklyMessage = configured
+        weeklySaveMessage = configured
             ? "Saved. Publish it (Advanced tab) to share it."
-            : "Saved. The weekly stays off until both channels and the role are filled in.";
-        weeklyMessageIsWarning = !configured;
+            : "Saved: the weekly is off.";
+        weeklySaveMessageIsWarning = !configured;
     }
 
     /// <summary>Picks up a finished "Start weekly". Called once per frame.</summary>
