@@ -343,8 +343,8 @@ public static partial class WeeklyMessage
     public static string PreviewText(int number, IUser author, IRole? role, string? warning)
     {
         var text = role is null
-            ? $"📝 **Draft** of {Name} · Issue No. {number}, by {author.Mention}. Draft mode: nothing is posted and nobody is notified. Delete it when you are done."
-            : $"📰 **{Name} · Issue No. {number}**, written by {author.Mention}. {role.Mention}, please review: "
+            ? $"📝 **Draft** · Issue No. {number}, by {author.Mention}. Draft mode: nothing is posted and nobody is notified. Delete it when you are done."
+            : $"📰 **Preview** · Issue No. {number}, written by {author.Mention}. {role.Mention}, please review: "
               + "**Approve** posts it, **Reject** cancels it.";
 
         return warning is null ? text : $"{text}\n⚠️ {warning}";

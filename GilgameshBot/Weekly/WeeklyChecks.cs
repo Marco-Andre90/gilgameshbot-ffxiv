@@ -8,7 +8,13 @@ namespace GilgameshBot.Weekly;
 /// <param name="Announcement">Where the weekly goes out: a text channel or a thread.</param>
 /// <param name="WebhookHome">Where its webhook lives: the announcement channel, or a thread's parent.</param>
 /// <param name="ThreadId">The announcement thread the webhook posts into; null for a plain channel.</param>
-public sealed record WeeklyTarget(ITextChannel Announcement, IIntegrationChannel WebhookHome, ulong? ThreadId, ITextChannel Approval, IRole Role);
+/// <param name="Approval">Where previews go: a text channel or a thread.</param>
+/// <param name="ApprovalHome">Where the previews' webhook lives, like <paramref name="WebhookHome"/>.</param>
+/// <param name="ApprovalThreadId">The approval thread, like <paramref name="ThreadId"/>.</param>
+public sealed record WeeklyTarget(
+    ITextChannel Announcement, IIntegrationChannel WebhookHome, ulong? ThreadId,
+    ITextChannel Approval, IIntegrationChannel ApprovalHome, ulong? ApprovalThreadId,
+    IRole Role);
 
 /// <summary>Resolves the weekly's channels and role and checks everything it needs before any write.</summary>
 internal static class WeeklyChecks
@@ -63,34 +69,27 @@ internal static class WeeklyChecks
             return (null, "The bot needs View Channel, Manage Webhooks and Read Message History in the weekly's announcement channel "
                           + "(for a thread, in its parent channel).");
 
-        IIntegrationChannel? home = announcement as IIntegrationChannel;
-        ulong? threadId = null;
-        if (announcement is IThreadChannel thread)
-        {
-            var parentId = thread switch
-            {
-                SocketThreadChannel { ParentChannel: { } p } => p.Id,
-                Discord.Rest.RestThreadChannel rest => rest.ParentChannelId,
-                _ => 0UL,
-            };
-            home = client.GetChannel(parentId) as IIntegrationChannel;
-            threadId = thread.Id;
-        }
-
-        if (home is null)
+        if (WebhookHome(client, announcement) is not var (home, threadId))
             return (null, "The weekly's announcement thread has no parent channel the bot can see.");
 
+        // Previews go out through a webhook too, so they look exactly like the weekly; the bot
+        // still posts the "Write the weekly" button there itself.
         if (CalendarChannels.Permissions(client, approval) is not { } perms
-            || !perms.ViewChannel || !CalendarChannels.CanSend(approval, perms) || !perms.EmbedLinks || !perms.AttachFiles
-            || !perms.ReadMessageHistory)
-            return (null, "The bot needs View Channel, Send Messages (Send Messages in Threads for a thread), Embed Links, Attach Files "
-                          + "and Read Message History in the weekly's approval channel.");
+            || !perms.ViewChannel || !perms.ManageWebhooks || !CalendarChannels.CanSend(approval, perms) || !perms.EmbedLinks
+            || !perms.AttachFiles || !perms.ReadMessageHistory)
+            return (null, "The bot needs View Channel, Manage Webhooks, Send Messages (Send Messages in Threads for a thread), "
+                          + "Embed Links, Attach Files and Read Message History in the weekly's approval channel "
+                          + "(for a thread, in its parent channel).");
+
+        if (WebhookHome(client, approval) is not var (approvalHome, approvalThreadId))
+            return (null, "The weekly's approval thread has no parent channel the bot can see.");
 
         if (guild.GetRole(roleId) is not { } role)
             return (null, "The weekly's approver role was not found on its server.");
 
-        // Otherwise the preview would name the role without notifying anybody.
-        if (!role.IsMentionable && !perms.MentionEveryone)
+        // A webhook only notifies a role that anyone may mention; otherwise the preview would name
+        // the role without notifying anybody.
+        if (!role.IsMentionable)
             return (null, $"The bot cannot notify @{role.Name}: turn on \"Allow anyone to @mention this role\" for it "
                           + "(Server Settings → Roles).");
 
@@ -100,6 +99,25 @@ internal static class WeeklyChecks
                 return (null, "The weekly reads its events from the calendar's Apollo channels, which must be on the weekly's server.");
         }
 
-        return (new WeeklyTarget(announcement, home, threadId, approval, role), null);
+        return (new WeeklyTarget(announcement, home, threadId, approval, approvalHome, approvalThreadId, role), null);
+    }
+
+    /// <summary>
+    /// Where a webhook posting into <paramref name="channel"/> lives, and the thread it posts into:
+    /// the channel itself, or a thread's parent and the thread. Null when a thread's parent is unknown.
+    /// </summary>
+    private static (IIntegrationChannel Home, ulong? ThreadId)? WebhookHome(DiscordSocketClient client, ITextChannel channel)
+    {
+        if (channel is not IThreadChannel thread)
+            return channel is IIntegrationChannel home ? (home, null) : null;
+
+        var parentId = thread switch
+        {
+            SocketThreadChannel { ParentChannel: { } p } => p.Id,
+            Discord.Rest.RestThreadChannel rest => rest.ParentChannelId,
+            _ => 0UL,
+        };
+
+        return client.GetChannel(parentId) is IIntegrationChannel parent ? (parent, thread.Id) : null;
     }
 }

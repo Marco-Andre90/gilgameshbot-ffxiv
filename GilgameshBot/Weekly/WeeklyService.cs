@@ -192,7 +192,7 @@ public sealed class WeeklyService
             }
 
             await writeGate.WaitAsync(ct);
-            IUserMessage preview;
+            ulong previewId;
             string? warning;
             try
             {
@@ -204,13 +204,20 @@ public sealed class WeeklyService
                 var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(sections), issue, now, ct);
                 var allowed = draft ? AllowedMentions.None : new AllowedMentions { RoleIds = [target.Role.Id] };
 
+                // Through the webhook, so the preview is exactly what will go out, name and icon included.
+                var webhook = await WebhookAsync(target.ApprovalHome, create: true, options)
+                              ?? throw new InvalidOperationException("The webhook could not be created.");
+
                 await CalendarChannels.ReopenAsync(target.Approval, options);
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
-                    preview = await target.Approval.SendFilesAsync(attachments,
+                    using var hook = new DiscordWebhookClient(webhook);
+                    previewId = await hook.SendFilesAsync(attachments,
                         WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Role, warning),
-                        embeds: embeds, allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id), options: options);
+                        embeds: embeds, username: WeeklyMessage.Name, avatarUrl: webhook.GetAvatarUrl(), options: options,
+                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id),
+                        threadId: target.ApprovalThreadId);
                 }
                 finally
                 {
@@ -228,7 +235,7 @@ public sealed class WeeklyService
                 writeGate.Release();
             }
 
-            var link = $"https://discord.com/channels/{guildId}/{target.Approval.Id}/{preview.Id}";
+            var link = $"https://discord.com/channels/{guildId}/{target.Approval.Id}/{previewId}";
             previewed = draft
                 ? $"Draft previewed: {link}. Nothing is posted; delete it when you are done."
                 : $"Preview posted for approval: {link}.";
@@ -293,7 +300,10 @@ public sealed class WeeklyService
         if (component.GuildId != guildId || ct.IsCancellationRequested || !id.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal))
             return;
 
-        if (component.ChannelId != config.WeeklyApprovalChannelId || component.Message.Author.Id != client.CurrentUser.Id)
+        // Discord only sends clicks on the bot's own messages and its webhooks' (previews), but the
+        // channel must still be the weekly's.
+        if (component.ChannelId != config.WeeklyApprovalChannelId
+            || (component.Message.Author.Id != client.CurrentUser.Id && !component.Message.Author.IsWebhook))
             return;
 
         var options = new RequestOptions { CancelToken = ct };
@@ -355,7 +365,28 @@ public sealed class WeeklyService
     {
         try
         {
-            await component.Message.DeleteAsync(new RequestOptions { CancelToken = ct });
+            var options = new RequestOptions { CancelToken = ct };
+            var draft = component.Message;
+            if (!draft.Author.IsWebhook)
+            {
+                await draft.DeleteAsync(options);
+                return;
+            }
+
+            // A webhook's message is deleted through that webhook: the bot itself may not delete it.
+            var (target, problem) = await WeeklyChecks.ResolveAsync(client, config, guildId, ct);
+            if (target is null)
+            {
+                await component.FollowupAsync($"The draft could not be deleted: {problem}", ephemeral: true,
+                    allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
+
+            if ((await BotWebhooksAsync(target.ApprovalHome, options)).FirstOrDefault(h => h.Id == draft.Author.Id) is not { } webhook)
+                return;
+
+            using var hook = new DiscordWebhookClient(webhook);
+            await hook.DeleteMessageAsync(draft.Id, options, target.ApprovalThreadId);
         }
         catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
         {
@@ -783,7 +814,10 @@ public sealed class WeeklyService
 
         foreach (var m in messages.OrderByDescending(m => m.Id))
         {
-            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name && WeeklyMessage.ReadIssue(m) is { } issue)
+            // Previews come from the same webhook but carry text (who wrote it, its status); a posted
+            // weekly has none.
+            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name && string.IsNullOrEmpty(m.Content)
+                && WeeklyMessage.ReadIssue(m) is { } issue)
                 return (m, issue);
         }
 
