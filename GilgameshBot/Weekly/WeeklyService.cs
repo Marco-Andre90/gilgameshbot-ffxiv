@@ -379,8 +379,16 @@ public sealed class WeeklyService
         try
         {
             // Settled already (posted, rejected, or another approver is posting): nothing to do.
-            if (await FreshAsync(preview, options) is not { } fresh || HasStatus(fresh))
+            // A "posting" claim left behind by a plugin that crashed mid-post may be taken over.
+            if (await FreshAsync(preview, options) is not { } fresh)
                 return;
+
+            if (HasStatus(fresh) && !IsAbandoned(fresh))
+            {
+                await component.FollowupAsync("This weekly is already being posted, or was posted or rejected.",
+                    ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
 
             await component.ModifyOriginalResponseAsync(p =>
             {
@@ -421,6 +429,10 @@ public sealed class WeeklyService
                 var (last, latestIssue) = await LastWeeklyAsync(target.Announcement, options);
                 if (last is not null && last.Timestamp > preview.Timestamp)
                 {
+                    // A slower claim that lost the race: the winner has already said where it went.
+                    if (await FreshAsync(preview, options) is { } now2 && HasLine(now2, ApprovedLine))
+                        return;
+
                     await component.ModifyOriginalResponseAsync(p =>
                     {
                         p.Content = $"{head}\n{ApprovedLine}Approved by {who}, but {Link(last)} went out after this preview was written, "
@@ -527,10 +539,21 @@ public sealed class WeeklyService
 
     /// <summary>True once a preview is being posted, posted or rejected.</summary>
     private static bool HasStatus(IMessage message) =>
-        message.Content.Split('\n').Any(line =>
-            line.StartsWith(ApproveLine, StringComparison.Ordinal)
-            || line.StartsWith(ApprovedLine, StringComparison.Ordinal)
-            || line.StartsWith(RejectedLine, StringComparison.Ordinal));
+        HasLine(message, ApproveLine) || HasLine(message, ApprovedLine) || HasLine(message, RejectedLine);
+
+    private static bool HasLine(IMessage message, string prefix) =>
+        message.Content.Split('\n').Any(line => line.StartsWith(prefix, StringComparison.Ordinal));
+
+    /// <summary>
+    /// A "posting" claim nobody finished: still only the claim, untouched for longer than any post
+    /// takes. The plugin that made it crashed or lost its connection without putting the buttons back.
+    /// </summary>
+    private static bool IsAbandoned(IMessage message) =>
+        HasLine(message, ApproveLine) && !HasLine(message, ApprovedLine) && !HasLine(message, RejectedLine)
+        && DateTimeOffset.UtcNow - (message.EditedTimestamp ?? message.Timestamp) > AbandonedAfter;
+
+    /// <summary>How long a "posting" claim may sit before another Approve may take it over.</summary>
+    private static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(3);
 
     /// <summary>Puts Approve / Reject back after a failed post, with the reason.</summary>
     private static Task RestoreAsync(SocketMessageComponent component, string head, string reason, RequestOptions options) =>

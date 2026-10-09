@@ -335,9 +335,15 @@ public static partial class WeeklyMessage
     /// <summary>The id an approval claims a preview with: unique per click.</summary>
     public static string ClaimId(ulong interactionId) => ClaimPrefix + interactionId;
 
-    /// <summary>The preview's only button while it is being posted: disabled, carrying the claim.</summary>
+    /// <summary>
+    /// The preview's buttons while it is being posted: a disabled one carrying the claim, and
+    /// Approve, which only takes over a claim that was abandoned (see the service).
+    /// </summary>
     public static MessageComponent Posting(string claim) =>
-        new ComponentBuilder().WithButton("Posting…", claim, ButtonStyle.Secondary, disabled: true).Build();
+        new ComponentBuilder()
+            .WithButton("Posting…", claim, ButtonStyle.Secondary, disabled: true)
+            .WithButton("Approve", ApproveId, ButtonStyle.Success)
+            .Build();
 
     /// <summary>The author of a draft, from its Delete draft button; null for other ids.</summary>
     public static ulong? DraftAuthor(string customId) =>
