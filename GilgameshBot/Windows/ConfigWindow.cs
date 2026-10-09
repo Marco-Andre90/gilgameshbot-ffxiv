@@ -5,6 +5,7 @@ using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using GilgameshBot.Calendar;
 using GilgameshBot.Relay;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
@@ -75,6 +76,17 @@ public sealed class ConfigWindow : Window, IDisposable
     private Task<(bool Ok, string World, string Tag, string FcName, ulong FcId)>? fcIdProbe;
     private Task<RosterOutcome>? rosterScan;
 
+    // Calendar tab: its edit buffers (filled from the config on first draw, after a save and after a sync) and the update job.
+    private bool calendarBuffersLoaded;
+    private string calendarChannelIdBuffer = string.Empty;
+    private string apolloChannelIdsBuffer = string.Empty;
+    private string calendarNameBuffer = string.Empty;
+    private int calendarThemeIndex;
+    private int calendarZoneIndex;
+    private string? calendarMessage;
+    private bool calendarMessageIsWarning;
+    private Task<CalendarOutcome>? calendarUpdate;
+
     public ConfigWindow(Plugin plugin) : base("GilgameshBot###GilgameshBotConfig")
     {
         this.plugin = plugin;
@@ -130,6 +142,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ConsumeCharacterProbe();
         ConsumeSetupCodeAction();
         ConsumeRosterJobs();
+        ConsumeCalendarUpdate();
         ConsumePublishAction();
 
         // A newer shared configuration was applied (or published, or imported): the edit buffers
@@ -168,6 +181,12 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (rosterTab)
                 DrawRosterTab();
+        }
+
+        using (var calendarTab = ImRaii.TabItem("Calendar"))
+        {
+            if (calendarTab)
+                DrawCalendarTab();
         }
 
         using (var advancedTab = ImRaii.TabItem("Advanced"))
@@ -339,7 +358,8 @@ public sealed class ConfigWindow : Window, IDisposable
 
         TextWrappedColoured(Grey,
             "Members can ask the bot for a setup code with /setupcode (sent by DM, deleted after 5 minutes), "
-            + "see who is relaying with /relaystatus and scan a Free Company's roster with /fcscan. "
+            + "see who is relaying with /relaystatus, scan a Free Company's roster with /fcscan "
+            + "and change or refresh the calendar with /calendar. "
             + "They only work while at least one member's plugin is connected.");
         ImGuiHelpers.ScaledDummy(2);
         TextWrappedColoured(Grey,
@@ -859,7 +879,7 @@ public sealed class ConfigWindow : Window, IDisposable
         // Outside the disabled scope, so the explanation still works while the button is greyed out.
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Makes your Free Company branches (roster settings included) and timers the configuration every member's "
+            "Makes your Free Company branches (roster and calendar settings included) and timers the configuration every member's "
             + "plugin follows. It is kept in each branch's state channel; the bot token is not part of it.\n\n"
             + "Plugins check when they connect and take over a newer revision, replacing their own branch table. "
             + "Setup codes handed out afterwards carry it too.\n\nNeeds the plugin connected.");
@@ -931,6 +951,7 @@ public sealed class ConfigWindow : Window, IDisposable
         tokenBuffer = config.BotToken;
         ClearBranchEditor();
         rosterBranch = -1;
+        calendarBuffersLoaded = false;
     }
 
     // --- FC roster tab ----------------------------------------------------------------------
@@ -1117,9 +1138,9 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
-        if (rosterChannelId != 0 && config.IsRelayOrStateChannel(rosterChannelId))
+        if (rosterChannelId != 0 && (config.IsRelayOrStateChannel(rosterChannelId) || config.IsCalendarChannel(rosterChannelId)))
         {
-            rosterMessage = "The roster channel must not be any branch's relay or state channel.";
+            rosterMessage = "The roster channel must not be any branch's relay, state or calendar channel.";
             return;
         }
 
@@ -1192,6 +1213,204 @@ public sealed class ConfigWindow : Window, IDisposable
             rosterMessage = outcome.Message;
             rosterMessageIsWarning = !outcome.Ok;
         }
+    }
+
+    // --- Calendar tab -----------------------------------------------------------------------
+
+    private void DrawCalendarTab()
+    {
+        ImGuiHelpers.ScaledDummy(4);
+
+        TextWrappedColoured(Grey,
+            "Keeps one month calendar in a Discord channel with the events every branch creates with Apollo. "
+            + "The bot redraws it every hour while a member's plugin is connected; members browse months, pick a "
+            + "day or try another theme with its buttons. Officers change it with /calendar in Discord.");
+        ImGuiHelpers.ScaledDummy(6);
+
+        SectionHeader("Channels");
+
+        if (!calendarBuffersLoaded)
+        {
+            calendarChannelIdBuffer = config.CalendarChannelId == 0 ? string.Empty : config.CalendarChannelId.ToString();
+            apolloChannelIdsBuffer = string.Join(", ", config.ApolloChannelIds);
+            calendarBuffersLoaded = true;
+        }
+
+        ImGui.InputText("Calendar channel ID", ref calendarChannelIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Where the bot keeps the calendar. Use a new, empty channel: the calendar then stays on top. In a channel "
+            + "that already has messages the bot pins it instead, which needs Pin Messages. It must not be a relay, "
+            + "state or roster channel.");
+
+        ImGui.InputText("Apollo channel IDs", ref apolloChannelIdsBuffer, 256);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "The channels where Apollo posts the Free Company's events, separated by commas (up to 10), on the same "
+            + "server as the calendar. The bot only reads them: it needs View Channel and Read Message History there, "
+            + "and the Message Content intent switched on in the Discord Developer Portal.");
+
+        ImGuiHelpers.ScaledDummy(4);
+
+        if (ImGui.Button("Save calendar settings", ImGuiHelpers.ScaledVector2(180, 0)))
+            SaveCalendarSettings();
+
+        SectionGap();
+        DrawCalendarLook();
+
+        SectionGap();
+        SectionHeader("Update");
+
+        var canUpdate = calendarUpdate is null && config.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
+        using (ImRaii.Disabled(!canUpdate))
+        {
+            if (ImGui.Button(calendarUpdate is null ? "Update now" : "Updating…", ImGuiHelpers.ScaledVector2(140, 0)))
+            {
+                // Off the draw thread: the update ends in drawing and encoding an image.
+                calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync());
+                calendarMessage = null;
+            }
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Reads the Apollo channels and redraws the calendar now, instead of waiting for the hourly update. "
+            + "Posts it the first time. Needs the plugin connected.");
+
+        if (!config.IsCalendarConfigured)
+            TextColoured(Grey, "Save a calendar channel and at least one Apollo channel first.");
+        else if (!plugin.Bridge.CanUpdateCalendar)
+            TextColoured(Grey, "Connect first.");
+
+        if (calendarMessage is { } msg)
+        {
+            ImGuiHelpers.ScaledDummy(4);
+            TextWrappedColoured(calendarMessageIsWarning ? Yellow : Green, msg);
+        }
+    }
+
+    /// <summary>
+    /// The name, theme and time zone everyone sees. They are kept on the calendar message in
+    /// Discord, not here, so each button writes its one setting there straight away.
+    /// </summary>
+    private void DrawCalendarLook()
+    {
+        SectionHeader("What everyone sees");
+
+        TextWrappedColoured(Grey,
+            "Kept on the calendar message in Discord, so they apply to everybody at once. The same as /calendar name, "
+            + "/calendar theme and /calendar timezone in Discord. The Theme button under the calendar only previews a theme "
+            + "for the member who clicks it.");
+        ImGuiHelpers.ScaledDummy(4);
+
+        var canApply = calendarUpdate is null && config.IsCalendarConfigured && plugin.Bridge.CanUpdateCalendar;
+        var buttonWidth = 130 * ImGuiHelpers.GlobalScale;
+        var fieldWidth = ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X;
+
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.InputTextWithHint("##calendarName", CalendarSettings.DefaultName, ref calendarNameBuffer, CalendarSettings.MaxNameLength);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set name", new Vector2(buttonWidth, 0)))
+            {
+                var name = CalendarSettings.NormalizeName(calendarNameBuffer);
+                ApplyCalendarChange(s => s with { Name = name });
+            }
+        }
+
+        var themes = CalendarThemes.All.Select(t => t.Label).ToArray();
+        calendarThemeIndex = Math.Clamp(calendarThemeIndex, 0, themes.Length - 1);
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.Combo("##calendarTheme", ref calendarThemeIndex, themes, themes.Length);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set theme", new Vector2(buttonWidth, 0)))
+            {
+                var theme = CalendarThemes.All[calendarThemeIndex].Key;
+                ApplyCalendarChange(s => s with { Theme = theme });
+            }
+        }
+
+        var zones = CalendarTimeZones.All.Select(z => z.Label).ToArray();
+        calendarZoneIndex = Math.Clamp(calendarZoneIndex, 0, zones.Length - 1);
+        ImGui.SetNextItemWidth(fieldWidth);
+        ImGui.Combo("##calendarZone", ref calendarZoneIndex, zones, zones.Length);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canApply))
+        {
+            if (ImGui.Button("Set time zone", new Vector2(buttonWidth, 0)))
+            {
+                var zone = CalendarTimeZones.All[calendarZoneIndex].Key;
+                ApplyCalendarChange(s => s with { TimeZone = zone });
+            }
+        }
+    }
+
+    private void ApplyCalendarChange(Func<CalendarSettings, CalendarSettings> change)
+    {
+        // Off the draw thread: the update ends in drawing and encoding an image.
+        calendarUpdate = Task.Run(() => plugin.Bridge.UpdateCalendarAsync(change));
+        calendarMessage = null;
+    }
+
+    private void SaveCalendarSettings()
+    {
+        calendarMessageIsWarning = true;
+
+        // Empty fields turn the calendar off.
+        ulong calendarChannelId = 0;
+        if (calendarChannelIdBuffer.Trim().Length > 0 && !ulong.TryParse(calendarChannelIdBuffer.Trim(), out calendarChannelId))
+        {
+            calendarMessage = "Calendar channel ID must be a number.";
+            return;
+        }
+
+        if (Configuration.ParseChannelList(apolloChannelIdsBuffer) is not { } apolloChannelIds)
+        {
+            calendarMessage = "Apollo channel IDs must be numbers separated by commas, at most 10.";
+            return;
+        }
+
+        // The calendar update edits and deletes the bot's own messages in its channel.
+        if (calendarChannelId != 0 && (config.IsRelayOrStateChannel(calendarChannelId) || config.IsRosterChannel(calendarChannelId)))
+        {
+            calendarMessage = "The calendar channel must not be any branch's relay, state or roster channel.";
+            return;
+        }
+
+        if (calendarChannelId != 0 && apolloChannelIds.Contains(calendarChannelId))
+        {
+            calendarMessage = "The calendar channel must not be one of the Apollo channels.";
+            return;
+        }
+
+        config.CalendarChannelId = calendarChannelId;
+        config.ApolloChannelIds = apolloChannelIds; // replaced, never mutated: background tasks read it
+        config.Save();
+        calendarBuffersLoaded = false;
+
+        calendarMessage = config.IsCalendarConfigured
+            ? "Saved. Publish it (Advanced tab) to share it."
+            : "Saved. The calendar stays off until the calendar channel and an Apollo channel are filled in.";
+        calendarMessageIsWarning = !config.IsCalendarConfigured;
+    }
+
+    /// <summary>Picks up a finished "Update now". Called once per frame.</summary>
+    private void ConsumeCalendarUpdate()
+    {
+        if (calendarUpdate is not { IsCompleted: true } update)
+            return;
+
+        calendarUpdate = null;
+
+        var outcome = update.IsCompletedSuccessfully
+            ? update.Result
+            : new CalendarOutcome(false, "The calendar update failed; see /xllog for details.");
+
+        calendarMessage = outcome.Message;
+        calendarMessageIsWarning = !outcome.Ok;
     }
 
     private void DrawBehaviourSettings()

@@ -3,6 +3,7 @@ using Dalamud.Plugin.Services;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
+using GilgameshBot.Calendar;
 using GilgameshBot.Chat;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
@@ -132,7 +133,9 @@ public sealed class DiscordBridge : IDisposable
 
             s = new Session(branch, new DiscordSocketClient(new DiscordSocketConfig
             {
-                // Guilds is enough to resolve the channel and roles; no privileged intents needed.
+                // Guilds is enough to resolve the channel and roles. The calendar reads Apollo's
+                // posts over REST (Message Content is switched on in the Developer Portal), so no
+                // message intents: they would stream every message of the server to every plugin.
                 GatewayIntents = GatewayIntents.Guilds,
                 MessageCacheSize = 0,
                 AlwaysDownloadUsers = false,
@@ -148,6 +151,8 @@ public sealed class DiscordBridge : IDisposable
         s.Client.Disconnected += ex => OnDisconnectedAsync(s, ex);
         s.Client.SlashCommandExecuted += command => OnSlashCommandAsync(s, command);
         s.Client.AutocompleteExecuted += interaction => OnAutocompleteAsync(s, interaction);
+        s.Client.ButtonExecuted += component => OnComponentAsync(s, component);
+        s.Client.SelectMenuExecuted += component => OnComponentAsync(s, component);
 
         s.Worker = Task.Run(() => WorkerLoopAsync(s));
         s.ConnectTask = Task.Run(async () =>
@@ -307,9 +312,13 @@ public sealed class DiscordBridge : IDisposable
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
-                // The bot's own /setupcode and /relaystatus. Registration is one REST round trip
-                // against this branch's server, so it goes on a background task like the rest.
-                s.Slash = new SlashCommands(config, log, guild, branch, coordinator, characterLabelProvider);
+                // The Free Company calendar, when it is on this server: refreshed hourly when due.
+                s.Calendar = new CalendarService(config, log, s.Client, guild.Id);
+                s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
+
+                // The bot's own slash commands. Registration is a few REST round trips against
+                // this branch's server, so it goes on a background task like the rest.
+                s.Slash = new SlashCommands(config, log, guild, branch, coordinator, characterLabelProvider, s.Calendar);
                 _ = Task.Run(() => s.Slash.RegisterAsync(s.Cts.Token));
 
                 // Ready means the token works, which is exactly what both of these wait for:
@@ -453,13 +462,22 @@ public sealed class DiscordBridge : IDisposable
         return slash.HandleAsync(command, s.Cts.Token);
     }
 
-    /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered by the leader.</summary>
+    /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered like the commands.</summary>
     private Task OnAutocompleteAsync(Session s, SocketAutocompleteInteraction interaction)
     {
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
             return Task.CompletedTask;
 
         return slash.HandleAutocompleteAsync(interaction, s.Cts.Token);
+    }
+
+    /// <summary>A button click or menu pick; only the calendar's are answered, by any connected plugin.</summary>
+    private Task OnComponentAsync(Session s, SocketMessageComponent component)
+    {
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Calendar is not { } calendar)
+            return Task.CompletedTask;
+
+        return calendar.HandleComponentAsync(component, s.Cts.Token);
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)
@@ -582,6 +600,35 @@ public sealed class DiscordBridge : IDisposable
         var ct = s.Cts.Token;
         var who = MessageFormatter.EscapeMarkdown(await CharacterLabelAsync());
         return await RosterScanner.ScanAsync(guild, branch, config, who, log, ct);
+    }
+
+    // --- Calendar ------------------------------------------------------------------------------
+
+    /// <summary>True when a calendar can be updated from the settings window: the bot is connected.</summary>
+    public bool CanUpdateCalendar => State == BridgeState.Connected && session?.Calendar is not null;
+
+    /// <summary>Redraws the calendar now, from the settings window.</summary>
+    public Task<CalendarOutcome> UpdateCalendarAsync() => UpdateCalendarAsync(change: null);
+
+    /// <summary>
+    /// Changes the calendar's settings everyone sees (name, theme, time zone) and redraws it, from
+    /// the settings window. The same as /calendar, without depending on the slash command.
+    /// </summary>
+    public async Task<CalendarOutcome> UpdateCalendarAsync(Func<CalendarSettings, CalendarSettings>? change)
+    {
+        var s = session;
+        if (s?.Calendar is not { } calendar || State != BridgeState.Connected)
+            return new CalendarOutcome(false, "Connect first.");
+
+        if (!config.IsCalendarConfigured)
+            return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
+
+        // Read before the first await: a teardown in between disposes the token source.
+        var ct = s.Cts.Token;
+        if (calendar.Current() is not { } setup)
+            return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
+
+        return await calendar.UpdateAsync(setup, force: true, change, ct);
     }
 
     // --- Shared configuration --------------------------------------------------------------
@@ -856,6 +903,11 @@ public sealed class DiscordBridge : IDisposable
             try { await sync; } catch { /* it logs its own errors */ }
         }
 
+        if (s.CalendarLoop is { } calendarLoop)
+        {
+            try { await calendarLoop; } catch { /* it logs its own errors */ }
+        }
+
         // Hand off: drop our presence message so a peer can take the head of the queue, and find
         // out whether anyone is left. Own short-lived token - the session's is already cancelled.
         var peerAlive = false;
@@ -946,6 +998,12 @@ public sealed class DiscordBridge : IDisposable
 
         /// <summary>The shared configuration sync; awaited on teardown like the presence loop.</summary>
         public Task? Sync { get; set; }
+
+        /// <summary>The server's calendar; built with the coordinator.</summary>
+        public CalendarService? Calendar { get; set; }
+
+        /// <summary>The hourly calendar refresh; awaited on teardown like the presence loop.</summary>
+        public Task? CalendarLoop { get; set; }
         public bool AnnouncedOnline { get; set; }
 
         /// <summary>Character label used in the Online notice, reused by the Offline one.</summary>

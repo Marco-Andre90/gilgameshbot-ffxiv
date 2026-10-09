@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
+using GilgameshBot.Calendar;
 using GilgameshBot.Relay;
 
 namespace GilgameshBot.Setup;
@@ -24,6 +25,27 @@ public sealed class SharedConfigFile
     [JsonPropertyName("heartbeat")] public int Heartbeat { get; set; } = 10;
     [JsonPropertyName("stale")] public int Stale { get; set; } = 20;
     [JsonPropertyName("branches")] public List<SetupBranch>? Branches { get; set; }
+
+    /// <summary>
+    /// True on files from plugins that know the calendar settings: theirs is the calendar
+    /// everybody follows, none included. A file without it comes from an older plugin, and
+    /// applying it keeps the local calendar settings.
+    /// </summary>
+    [JsonPropertyName("calendar")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CarriesCalendar { get; set; }
+
+    [JsonPropertyName("calendarChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CalendarChannel { get; set; }
+
+    [JsonPropertyName("apolloChannels")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ApolloChannels { get; set; }
+
+    // Parsed, filled in by TryParse.
+    [JsonIgnore] public ulong CalendarChannelId { get; set; }
+    [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
 }
 
 /// <summary>What to tell the officer after publishing. Fixed text plus names from the config.</summary>
@@ -129,6 +151,7 @@ public static class SharedConfig
             return false;
 
         (parsed.Heartbeat, parsed.Stale) = SetupCode.ClampTimers(parsed.Heartbeat, parsed.Stale);
+        (parsed.CalendarChannelId, parsed.ApolloChannelIds) = SetupCode.ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
 
         var by = (parsed.PublishedBy ?? string.Empty).Trim();
         parsed.PublishedBy = by.Length > 100 ? by[..100] : by;
@@ -192,6 +215,19 @@ public static class SharedConfig
     public static void Apply(SharedConfigFile file, Configuration config)
     {
         SetupCode.ApplyBranches(file.Branches, file.Heartbeat, file.Stale, config);
+
+        // A plugin that predates the calendar never saw its settings, so their absence means
+        // "unknown", not "removed": keep this plugin's own then.
+        if (file.CarriesCalendar == true)
+        {
+            config.CalendarChannelId = file.CalendarChannelId;
+            config.ApolloChannelIds = file.ApolloChannelIds;
+        }
+        else if (config.IsRelayOrStateChannel(config.CalendarChannelId) || config.IsRosterChannel(config.CalendarChannelId))
+        {
+            config.CalendarChannelId = 0;
+        }
+
         config.SharedRevision = file.Revision;
         config.SharedPublishedBy = file.PublishedBy;
         config.SharedPublishedAtUtc = file.PublishedAtUtc;
@@ -224,7 +260,7 @@ public static class SharedConfig
                 return new SharedConfigOutcome(false,
                     $"Branch {Label(incomplete)} is incomplete. Finish or remove it before publishing.");
 
-            if (Preflight(client, branches) is { } problem)
+            if ((Preflight(client, branches) ?? await CalendarPreflightAsync(client, config, ct)) is { } problem)
                 return new SharedConfigOutcome(false, $"{problem} Nothing was published.");
 
             var channels = StateChannels(client, branches);
@@ -273,14 +309,21 @@ public static class SharedConfig
                 Heartbeat = heartbeat,
                 Stale = stale,
                 Branches = SetupCode.ToSetupBranches(branches),
+                CarriesCalendar = true,
+                CalendarChannel = SetupCode.FormatCalendar(config).Channel,
+                ApolloChannels = SetupCode.FormatCalendar(config).Apollo,
             };
 
             // Checked exactly as a reader will check it: a file that other plugins would ignore
             // must not go out.
             var json = JsonSerializer.Serialize(published, JsonOptions);
-            if (!TryParse(json, out _))
+            if (!TryParse(json, out var check))
                 return new SharedConfigOutcome(false,
                     "The branch table is not valid (check the IDs, and that no branch uses its relay channel as its state channel). Nothing was published.");
+
+            if (config.IsCalendarConfigured && check.CalendarChannelId == 0)
+                return new SharedConfigOutcome(false,
+                    "The calendar channel must not be an Apollo channel or any branch's relay, state or roster channel. Nothing was published.");
 
             var failed = new List<string>();
             foreach (var channel in channels)
@@ -346,6 +389,37 @@ public static class SharedConfig
             var perms = guild.CurrentUser.GetPermissions(state);
             if (!perms.ViewChannel || !perms.SendMessages || !perms.AttachFiles || !perms.ReadMessageHistory)
                 return $"The bot needs View Channel, Send Messages, Attach Files and Read Message History in the state channel of {Label(b)}.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The calendar channel and every Apollo channel must exist, on one server, with the
+    /// permissions the calendar needs. Looked up over REST when not cached: an archived thread is
+    /// not in the cache. Null when all is well.
+    /// </summary>
+    private static async Task<string?> CalendarPreflightAsync(DiscordSocketClient client, Configuration config, CancellationToken ct)
+    {
+        if (!config.IsCalendarConfigured)
+            return null;
+
+        var options = new RequestOptions { CancelToken = ct };
+        if (await CalendarChannels.ResolveAsync(client, config.CalendarChannelId, options) is not { } calendar)
+            return "The calendar channel was not found, or the bot cannot see it.";
+
+        if (CalendarChannels.Permissions(client, calendar) is not { } perms
+            || !perms.ViewChannel || !CalendarChannels.CanSend(calendar, perms) || !perms.EmbedLinks
+            || !perms.AttachFiles || !perms.ReadMessageHistory)
+            return "The bot needs View Channel, Send Messages, Embed Links, Attach Files and Read Message History in the calendar channel.";
+
+        foreach (var id in config.ApolloChannelIds.ToList())
+        {
+            if (await CalendarChannels.ResolveAsync(client, id, options) is not { } apollo || apollo.GuildId != calendar.GuildId)
+                return "An Apollo channel was not found on the calendar's server, or the bot cannot see it.";
+
+            if (CalendarChannels.Permissions(client, apollo) is not { ViewChannel: true, ReadMessageHistory: true })
+                return $"The bot needs View Channel and Read Message History in #{apollo.Name}.";
         }
 
         return null;

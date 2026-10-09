@@ -84,6 +84,23 @@ public sealed class SetupPayload
     [JsonPropertyName("receipt")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SetupReceipt? Receipt { get; set; }
+
+    /// <summary>
+    /// The calendar channel. Optional: absent on codes from older plugins and when there is no
+    /// calendar, and then an import keeps the local calendar settings.
+    /// </summary>
+    [JsonPropertyName("calendarChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CalendarChannel { get; set; }
+
+    /// <summary>The Apollo channels, comma-separated. Optional, with <see cref="CalendarChannel"/>.</summary>
+    [JsonPropertyName("apolloChannels")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ApolloChannels { get; set; }
+
+    // Parsed IDs, filled in by TryDecode once validated.
+    [JsonIgnore] public ulong CalendarChannelId { get; set; }
+    [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
 }
 
 /// <summary>
@@ -130,6 +147,8 @@ public static class SetupCode
             Branches = ToSetupBranches(config.Branches),
             Revision = config.SharedRevision > 0 ? config.SharedRevision : null,
             Receipt = receipt,
+            CalendarChannel = FormatCalendar(config).Channel,
+            ApolloChannels = FormatCalendar(config).Apollo,
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -245,6 +264,12 @@ public static class SetupCode
         if (parsed.Revision is <= 0)
             parsed.Revision = null;
 
+        // Like the roster fields, a bad calendar setting is dropped rather than failing the import.
+        if (parsed.CalendarChannel is not null)
+        {
+            (parsed.CalendarChannelId, parsed.ApolloChannelIds) = ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
+        }
+
         payload = parsed;
         return true;
     }
@@ -325,6 +350,19 @@ public static class SetupCode
         config.BotToken = payload.Token;
         ApplyBranches(payload.Branches, payload.Heartbeat, payload.Stale, config);
 
+        // A code that carries calendar settings brings them, even "none" when they did not pass
+        // validation; one without them (an older plugin's) leaves the local ones, unless those now
+        // clash with the imported branches.
+        if (payload.CalendarChannel is not null)
+        {
+            config.CalendarChannelId = payload.CalendarChannelId;
+            config.ApolloChannelIds = payload.ApolloChannelIds;
+        }
+        else if (config.IsRelayOrStateChannel(config.CalendarChannelId) || config.IsRosterChannel(config.CalendarChannelId))
+        {
+            config.CalendarChannelId = 0;
+        }
+
         // The code's revision, or 0 when it carries none: the next sync then brings in whatever
         // the state channels hold, so a code older than the shared configuration heals itself.
         config.SharedRevision = payload.Revision ?? 0;
@@ -371,6 +409,29 @@ public static class SetupCode
             .ToList();
         config.HeartbeatSeconds = heartbeat;
         config.StaleSeconds = stale;
+    }
+
+    /// <summary>The calendar settings as they travel in a setup code or the shared configuration; nulls when there is no calendar.</summary>
+    internal static (string? Channel, string? Apollo) FormatCalendar(Configuration config) =>
+        config.IsCalendarConfigured
+            ? (config.CalendarChannelId.ToString(), string.Join(",", config.ApolloChannelIds))
+            : (null, null);
+
+    /// <summary>
+    /// The calendar settings from a setup code or the shared configuration; (0, []) when they are
+    /// missing or malformed. The calendar update edits and deletes the bot's messages in its
+    /// channel, so a calendar channel that is any branch's relay, state or roster channel, or one
+    /// of the Apollo channels, is dropped.
+    /// </summary>
+    internal static (ulong Channel, List<ulong> Apollo) ParseCalendar(string? channel, string? apollo, List<SetupBranch> branches)
+    {
+        if (!ulong.TryParse(channel, out var channelId) || channelId == 0
+            || Configuration.ParseChannelList(apollo) is not { Count: > 0 } apolloIds
+            || apolloIds.Contains(channelId)
+            || branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId || b.RosterChannelId == channelId))
+            return (0, []);
+
+        return (channelId, apolloIds);
     }
 
     private static string ToBase64Url(byte[] bytes) =>

@@ -29,6 +29,19 @@
   <ItemGroup>
     <!-- Discord gateway + REST client. Pulls in Discord.Net.Core and Discord.Net.Rest. -->
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+
+    <!--
+      Draws the calendar image. Fully managed (no native libraries), so it loads inside Dalamud.
+      Six Labors Split License: Apache 2.0 terms for open source projects like this one.
+    -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Fonts for the calendar image (SIL Open Font License; see Calendar/Fonts/OFL-*.txt). -->
+    <EmbeddedResource Include="Calendar\Fonts\*.ttf" LogicalName="GilgameshBot.Fonts.%(Filename)%(Extension)" />
+    <None Include="Calendar\Fonts\OFL-*.txt" CopyToOutputDirectory="PreserveNewest" Link="licenses\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

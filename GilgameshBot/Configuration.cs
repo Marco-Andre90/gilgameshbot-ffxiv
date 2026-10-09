@@ -207,6 +207,23 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>When <see cref="SharedRevision"/> was published. Null when unknown.</summary>
     public DateTime? SharedPublishedAtUtc { get; set; }
 
+    // --- Calendar ---
+
+    /// <summary>
+    /// Channel that holds the Free Company calendar: one calendar for every branch, with the
+    /// events of every Apollo channel below. 0 when there is no calendar.
+    /// </summary>
+    public ulong CalendarChannelId { get; set; }
+
+    /// <summary>
+    /// Channels where Apollo posts the Free Company's events, on the calendar channel's server;
+    /// only ever read. Replaced wholesale, never mutated: background tasks read it.
+    /// </summary>
+    public List<ulong> ApolloChannelIds { get; set; } = [];
+
+    /// <summary>True when there is a calendar: a calendar channel and at least one Apollo channel.</summary>
+    public bool IsCalendarConfigured => CalendarChannelId != 0 && ApolloChannelIds.Count > 0;
+
     // --- Behaviour ---
 
     /// <summary>Connect to Discord automatically when a character logs in.</summary>
@@ -258,7 +275,30 @@ public sealed class Configuration : IPluginConfiguration
     /// channel must never be one: the roster scan edits and deletes the bot's messages there.
     /// </summary>
     public bool IsRelayOrStateChannel(ulong channelId) =>
-        Branches.Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
+        Branches.ToList().Any(b => b.ChannelId == channelId || b.StateChannelId == channelId);
+
+    /// <summary>True when <paramref name="channelId"/> is some branch's roster channel. A calendar channel must never be one.</summary>
+    public bool IsRosterChannel(ulong channelId) =>
+        channelId != 0 && Branches.ToList().Any(b => b.RosterChannelId == channelId);
+
+    /// <summary>True when <paramref name="channelId"/> is the calendar channel. A roster channel must never be it.</summary>
+    public bool IsCalendarChannel(ulong channelId) => channelId != 0 && CalendarChannelId == channelId;
+
+    /// <summary>"123, 456" → [123, 456]. Null when any part is not a channel ID; at most 10, duplicates dropped.</summary>
+    public static List<ulong>? ParseChannelList(string? text)
+    {
+        var ids = new List<ulong>();
+        foreach (var part in (text ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!ulong.TryParse(part, out var id) || id == 0)
+                return null;
+
+            if (!ids.Contains(id))
+                ids.Add(id);
+        }
+
+        return ids.Count <= 10 ? ids : null;
+    }
 
     /// <summary>Finds the branch the given character belongs to, or null if none is configured.</summary>
     public FcBranch? FindBranch(string world, string fcTag, string fcName)
