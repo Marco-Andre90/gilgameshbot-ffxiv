@@ -29,9 +29,11 @@ public static class CalendarRenderer
     /// <summary>Layout units are multiplied by this; 680 units wide become 1020 pixels.</summary>
     private const float Scale = 1.5f;
 
-    private static readonly object Gate = new();
+    /// <summary>One render at a time, for every picture the plugin draws (the calendar and the weekly header).</summary>
+    internal static readonly object Gate = new();
 
-    private static readonly ImageSharpConfiguration ImageConfig = CreateConfig();
+    /// <summary>The small private memory pool every render uses; released after each one.</summary>
+    internal static readonly ImageSharpConfiguration ImageConfig = CreateConfig();
 
     private static ImageSharpConfiguration CreateConfig()
     {

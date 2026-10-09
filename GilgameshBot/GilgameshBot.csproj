@@ -26,9 +26,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!--
+    Builds outside GitHub Actions (dev plugins) announce their version with a "-dev" suffix, so a
+    test build is never mistaken for a release. Actions sets GITHUB_ACTIONS=true.
+  -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' != 'true'">
+    <DefineConstants>$(DefineConstants);DEV_BUILD</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Discord gateway + REST client. Pulls in Discord.Net.Core and Discord.Net.Rest. -->
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+
+    <!-- Posts The Fat Cat Weekly through a channel webhook, under its own name and avatar. -->
+    <PackageReference Include="Discord.Net.Webhook" Version="3.20.1" />
 
     <!--
       Draws the calendar image. Fully managed (no native libraries), so it loads inside Dalamud.
@@ -39,9 +50,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Fonts for the calendar image (SIL Open Font License; see Calendar/Fonts/OFL-*.txt). -->
+    <!-- Fonts for the calendar image and the weekly header (SIL Open Font License; see Calendar/Fonts/OFL-*.txt). -->
     <EmbeddedResource Include="Calendar\Fonts\*.ttf" LogicalName="GilgameshBot.Fonts.%(Filename)%(Extension)" />
     <None Include="Calendar\Fonts\OFL-*.txt" CopyToOutputDirectory="PreserveNewest" Link="licenses\%(Filename)%(Extension)" />
+
+    <!-- The Fat Cat Weekly's pictures: header template (2400×930), webhook avatar and the two thumbnails. -->
+    <EmbeddedResource Include="Weekly\Assets\*.png" LogicalName="GilgameshBot.Weekly.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

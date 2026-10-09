@@ -224,6 +224,68 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>True when there is a calendar: a calendar channel and at least one Apollo channel.</summary>
     public bool IsCalendarConfigured => CalendarChannelId != 0 && ApolloChannelIds.Count > 0;
 
+    // --- FC leader ---
+
+    /// <summary>
+    /// Discord user ID of the Free Company leader: whoever has the last word where a feature asks
+    /// for approval (the weekly's previews). 0 when not set. Shared like the branches.
+    /// </summary>
+    public ulong FcLeaderId { get; set; }
+
+    // --- Weekly announcement ---
+
+    /// <summary>
+    /// Channel that receives The Fat Cat Weekly, posted through a webhook the bot creates there.
+    /// On the calendar's server: the weekly's events come from the calendar's Apollo channels.
+    /// 0 when there is no weekly.
+    /// </summary>
+    public ulong WeeklyChannelId { get; set; }
+
+    /// <summary>Channel where a weekly is written and previewed, and approved or rejected, before it goes out.</summary>
+    public ulong WeeklyApprovalChannelId { get; set; }
+
+
+    /// <summary>
+    /// Personal: a weekly started from this plugin's settings window is a draft — previewed
+    /// without mentioning the role, never posted.
+    /// </summary>
+    public bool WeeklyDraftMode { get; set; }
+
+    /// <summary>True when there is a weekly: an announcement channel and an approval channel. Approvals go to <see cref="FcLeaderId"/>.</summary>
+    public bool IsWeeklyConfigured => WeeklyChannelId != 0 && WeeklyApprovalChannelId != 0;
+
+    /// <summary>True when <paramref name="channelId"/> is the weekly's announcement or approval channel.</summary>
+    public bool IsWeeklyChannel(ulong channelId) =>
+        channelId != 0 && (WeeklyChannelId == channelId || WeeklyApprovalChannelId == channelId);
+
+    /// <summary>
+    /// Why <paramref name="announcement"/> and <paramref name="approval"/> cannot be the weekly's
+    /// channels, or null when they can. The weekly writes and deletes the bot's messages there, so
+    /// not in a relay, state or roster channel. Both may be the same channel, and either may be the
+    /// calendar channel or an Apollo channel: the calendar and the weekly only ever touch their own
+    /// messages (by custom id prefix and webhook), and Apollo channels are only read.
+    /// </summary>
+    public string? WeeklyChannelProblem(ulong announcement, ulong approval)
+    {
+        foreach (var id in new[] { announcement, approval })
+        {
+            if (IsRelayOrStateChannel(id) || IsRosterChannel(id))
+                return "The weekly's channels must not be any branch's relay, state or roster channel.";
+        }
+
+        return null;
+    }
+
+    /// <summary>Turns the weekly off when its channels now clash with others (after an import or a sync).</summary>
+    public void DropClashingWeekly()
+    {
+        if (IsWeeklyConfigured && WeeklyChannelProblem(WeeklyChannelId, WeeklyApprovalChannelId) is not null)
+        {
+            WeeklyChannelId = 0;
+            WeeklyApprovalChannelId = 0;
+        }
+    }
+
     // --- Behaviour ---
 
     /// <summary>Connect to Discord automatically when a character logs in.</summary>
@@ -281,7 +343,7 @@ public sealed class Configuration : IPluginConfiguration
     public bool IsRosterChannel(ulong channelId) =>
         channelId != 0 && Branches.ToList().Any(b => b.RosterChannelId == channelId);
 
-    /// <summary>True when <paramref name="channelId"/> is the calendar channel. A roster channel must never be it.</summary>
+    /// <summary>True when <paramref name="channelId"/> is the calendar channel. A roster or weekly channel must never be it.</summary>
     public bool IsCalendarChannel(ulong channelId) => channelId != 0 && CalendarChannelId == channelId;
 
     /// <summary>"123, 456" → [123, 456]. Null when any part is not a channel ID; at most 10, duplicates dropped.</summary>

@@ -98,9 +98,38 @@ public sealed class SetupPayload
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ApolloChannels { get; set; }
 
+    /// <summary>
+    /// The weekly's announcement channel. Optional, like the calendar: absent on codes from older
+    /// plugins and when there is no weekly, and then an import keeps the local weekly settings.
+    /// </summary>
+    [JsonPropertyName("weeklyChannel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyChannel { get; set; }
+
+    /// <summary>The weekly's approval channel. Optional, with <see cref="WeeklyChannel"/>.</summary>
+    [JsonPropertyName("weeklyApproval")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyApproval { get; set; }
+
+    /// <summary>
+    /// The FC leader's Discord user ID. Optional: absent on codes from older plugins and when none
+    /// is set, and then an import keeps the local one.
+    /// </summary>
+    [JsonPropertyName("fcLeader")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FcLeader { get; set; }
+
     // Parsed IDs, filled in by TryDecode once validated.
     [JsonIgnore] public ulong CalendarChannelId { get; set; }
     [JsonIgnore] public List<ulong> ApolloChannelIds { get; set; } = [];
+    [JsonIgnore] public WeeklyIds Weekly { get; set; } = WeeklyIds.None;
+    [JsonIgnore] public ulong FcLeaderId { get; set; }
+}
+
+/// <summary>The weekly's channels as they are applied; both zero when there is no weekly.</summary>
+public sealed record WeeklyIds(ulong Channel, ulong Approval)
+{
+    public static readonly WeeklyIds None = new(0, 0);
 }
 
 /// <summary>
@@ -149,6 +178,9 @@ public static class SetupCode
             Receipt = receipt,
             CalendarChannel = FormatCalendar(config).Channel,
             ApolloChannels = FormatCalendar(config).Apollo,
+            WeeklyChannel = FormatWeekly(config).Channel,
+            WeeklyApproval = FormatWeekly(config).Approval,
+            FcLeader = FormatLeader(config),
         };
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
@@ -270,6 +302,14 @@ public static class SetupCode
             (parsed.CalendarChannelId, parsed.ApolloChannelIds) = ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
         }
 
+        // The same for the weekly.
+        if (parsed.WeeklyChannel is not null)
+        {
+            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.Branches!);
+        }
+
+        parsed.FcLeaderId = ParseLeader(parsed.FcLeader);
+
         payload = parsed;
         return true;
     }
@@ -363,6 +403,16 @@ public static class SetupCode
             config.CalendarChannelId = 0;
         }
 
+        // The weekly likewise; local settings that now clash with the imported ones are dropped.
+        if (payload.WeeklyChannel is not null)
+            ApplyWeekly(payload.Weekly, config);
+
+        // A code that names the FC leader brings it; one without (older, or none set) leaves the local one.
+        if (payload.FcLeaderId != 0)
+            config.FcLeaderId = payload.FcLeaderId;
+
+        config.DropClashingWeekly();
+
         // The code's revision, or 0 when it carries none: the next sync then brings in whatever
         // the state channels hold, so a code older than the shared configuration heals itself.
         config.SharedRevision = payload.Revision ?? 0;
@@ -432,6 +482,47 @@ public static class SetupCode
             return (0, []);
 
         return (channelId, apolloIds);
+    }
+
+    /// <summary>The weekly settings as they travel in a setup code or the shared configuration; nulls when there is no weekly.</summary>
+    internal static (string? Channel, string? Approval) FormatWeekly(Configuration config) =>
+        config.IsWeeklyConfigured
+            ? (config.WeeklyChannelId.ToString(), config.WeeklyApprovalChannelId.ToString())
+            : (null, null);
+
+    /// <summary>The FC leader as it travels in a setup code or the shared configuration; null when none is set.</summary>
+    internal static string? FormatLeader(Configuration config) =>
+        config.FcLeaderId != 0 ? config.FcLeaderId.ToString() : null;
+
+    /// <summary>The FC leader's user ID from a setup code or the shared configuration; 0 when missing or malformed.</summary>
+    internal static ulong ParseLeader(string? leader) =>
+        ulong.TryParse(leader, out var id) ? id : 0;
+
+    /// <summary>
+    /// The weekly settings from a setup code or the shared configuration; <see cref="WeeklyIds.None"/>
+    /// when they are missing or malformed, or when a channel is any branch's relay, state or roster
+    /// channel (see <see cref="Configuration.WeeklyChannelProblem"/>).
+    /// </summary>
+    internal static WeeklyIds ParseWeekly(string? channel, string? approval, List<SetupBranch> branches)
+    {
+        if (!ulong.TryParse(channel, out var channelId) || channelId == 0
+            || !ulong.TryParse(approval, out var approvalId) || approvalId == 0)
+            return WeeklyIds.None;
+
+        foreach (var id in new[] { channelId, approvalId })
+        {
+            if (branches.Any(b => b.ChannelId == id || b.StateChannelId == id || b.RosterChannelId == id))
+                return WeeklyIds.None;
+        }
+
+        return new WeeklyIds(channelId, approvalId);
+    }
+
+    /// <summary>Writes parsed weekly settings into the config. Does not save.</summary>
+    internal static void ApplyWeekly(WeeklyIds weekly, Configuration config)
+    {
+        config.WeeklyChannelId = weekly.Channel;
+        config.WeeklyApprovalChannelId = weekly.Approval;
     }
 
     private static string ToBase64Url(byte[] bytes) =>

@@ -7,6 +7,7 @@ using GilgameshBot.Calendar;
 using GilgameshBot.Chat;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
+using GilgameshBot.Weekly;
 
 namespace GilgameshBot.Relay;
 
@@ -41,6 +42,9 @@ public sealed class DiscordBridge : IDisposable
     /// <summary>Budget for the two REST calls of a clean handoff, inside <see cref="DisposeTimeout"/>.</summary>
     private static readonly TimeSpan ResignTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StaleMessageAge = TimeSpan.FromMinutes(5);
+
+    /// <summary>Budget for the weekly's jobs to finish on teardown, inside <see cref="DisposeTimeout"/>.</summary>
+    private static readonly TimeSpan WeeklyDrainTimeout = TimeSpan.FromSeconds(2);
     private const int QueueCapacity = 200;
 
     private readonly Configuration config;
@@ -153,6 +157,7 @@ public sealed class DiscordBridge : IDisposable
         s.Client.AutocompleteExecuted += interaction => OnAutocompleteAsync(s, interaction);
         s.Client.ButtonExecuted += component => OnComponentAsync(s, component);
         s.Client.SelectMenuExecuted += component => OnComponentAsync(s, component);
+        s.Client.ModalSubmitted += modal => OnModalAsync(s, modal);
 
         s.Worker = Task.Run(() => WorkerLoopAsync(s));
         s.ConnectTask = Task.Run(async () =>
@@ -316,9 +321,13 @@ public sealed class DiscordBridge : IDisposable
                 s.Calendar = new CalendarService(config, log, s.Client, guild.Id);
                 s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
 
+                // The Fat Cat Weekly, when it is on this server: its events refreshed hourly.
+                s.Weekly = new WeeklyService(config, log, s.Client, guild.Id, s.Calendar);
+                s.WeeklyLoop = Task.Run(() => s.Weekly.RunAsync(s.Cts.Token));
+
                 // The bot's own slash commands. Registration is a few REST round trips against
                 // this branch's server, so it goes on a background task like the rest.
-                s.Slash = new SlashCommands(config, log, guild, branch, coordinator, characterLabelProvider, s.Calendar);
+                s.Slash = new SlashCommands(config, log, guild, branch, coordinator, characterLabelProvider, s.Calendar, s.Weekly);
                 _ = Task.Run(() => s.Slash.RegisterAsync(s.Cts.Token));
 
                 // Ready means the token works, which is exactly what both of these wait for:
@@ -371,10 +380,17 @@ public sealed class DiscordBridge : IDisposable
 
     /// <summary>
     /// <c>v0.11.0</c>: the release workflow stamps the version into the assembly
-    /// (<c>-p:Version=x.y.z.0</c>), so the fourth part is dropped.
+    /// (<c>-p:Version=x.y.z.0</c>), so the fourth part is dropped. A build made anywhere else
+    /// (a dev plugin) keeps the csproj's placeholder version and says so: <c>v0.1.0-dev</c>.
     /// </summary>
     private static readonly string PluginVersion =
-        typeof(DiscordBridge).Assembly.GetName().Version is { } v ? $"v{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+        typeof(DiscordBridge).Assembly.GetName().Version is { } v ? $"v{v.Major}.{v.Minor}.{v.Build}{DevSuffix}" : string.Empty;
+
+#if DEV_BUILD
+    private const string DevSuffix = "-dev";
+#else
+    private const string DevSuffix = "";
+#endif
 
     private async Task AnnounceOnlineAsync(Session s, SocketTextChannel textChannel)
     {
@@ -471,13 +487,25 @@ public sealed class DiscordBridge : IDisposable
         return slash.HandleAutocompleteAsync(interaction, s.Cts.Token);
     }
 
-    /// <summary>A button click or menu pick; only the calendar's are answered, by any connected plugin.</summary>
+    /// <summary>A button click or menu pick; only the calendar's and the weekly's are answered, by any connected plugin.</summary>
     private Task OnComponentAsync(Session s, SocketMessageComponent component)
     {
-        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Calendar is not { } calendar)
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Calendar is not { } calendar || s.Weekly is not { } weekly)
             return Task.CompletedTask;
 
-        return calendar.HandleComponentAsync(component, s.Cts.Token);
+        // Each one ignores what is not its own, by custom id prefix.
+        return component.Data.CustomId.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal)
+            ? weekly.HandleComponentAsync(component, s.Cts.Token)
+            : calendar.HandleComponentAsync(component, s.Cts.Token);
+    }
+
+    /// <summary>A submitted form; only the weekly has one, answered by any connected plugin.</summary>
+    private Task OnModalAsync(Session s, SocketModal modal)
+    {
+        if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Weekly is not { } weekly)
+            return Task.CompletedTask;
+
+        return weekly.HandleModalAsync(modal, s.Cts.Token);
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)
@@ -629,6 +657,24 @@ public sealed class DiscordBridge : IDisposable
             return new CalendarOutcome(false, "Save the calendar and Apollo channels first.");
 
         return await calendar.UpdateAsync(setup, force: true, change, ct);
+    }
+
+    // --- Weekly ------------------------------------------------------------------------------
+
+    /// <summary>True when a weekly can be started from the settings window: the bot is connected.</summary>
+    public bool CanStartWeekly => State == BridgeState.Connected && session?.Weekly is not null;
+
+    /// <summary>Starts a weekly from the settings window: posts its "Write the weekly" button in the approval channel.</summary>
+    public async Task<WeeklyOutcome> StartWeeklyAsync(bool draft)
+    {
+        var s = session;
+        if (s?.Weekly is not { } weekly || State != BridgeState.Connected)
+            return new WeeklyOutcome(false, "Connect first.");
+
+        // Read before the first await: a teardown in between disposes the token source.
+        var ct = s.Cts.Token;
+        var who = await CharacterLabelAsync();
+        return await weekly.StartAsync(who, draft, ct);
     }
 
     // --- Shared configuration --------------------------------------------------------------
@@ -908,6 +954,18 @@ public sealed class DiscordBridge : IDisposable
             try { await calendarLoop; } catch { /* it logs its own errors */ }
         }
 
+        if (s.WeeklyLoop is { } weeklyLoop)
+        {
+            try { await weeklyLoop; } catch { /* it logs its own errors */ }
+        }
+
+        // A preview or an approval under way gets its last word in (the officer's text handed
+        // back, the preview's buttons put back) while the client still works.
+        if (s.Weekly is { } weekly)
+        {
+            try { await weekly.DrainAsync(WeeklyDrainTimeout); } catch { /* they log their own errors */ }
+        }
+
         // Hand off: drop our presence message so a peer can take the head of the queue, and find
         // out whether anyone is left. Own short-lived token - the session's is already cancelled.
         var peerAlive = false;
@@ -1004,6 +1062,12 @@ public sealed class DiscordBridge : IDisposable
 
         /// <summary>The hourly calendar refresh; awaited on teardown like the presence loop.</summary>
         public Task? CalendarLoop { get; set; }
+
+        /// <summary>The server's weekly; built with the calendar.</summary>
+        public WeeklyService? Weekly { get; set; }
+
+        /// <summary>The hourly refresh of the weekly's events; awaited on teardown like the presence loop.</summary>
+        public Task? WeeklyLoop { get; set; }
         public bool AnnouncedOnline { get; set; }
 
         /// <summary>Character label used in the Online notice, reused by the Offline one.</summary>

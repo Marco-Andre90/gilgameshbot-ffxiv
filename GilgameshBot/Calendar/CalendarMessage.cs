@@ -122,7 +122,9 @@ public static class CalendarMessage
     /// <summary>"• [Title](link to the Apollo post) — when · in how long".</summary>
     private static string Line(CalendarEvent e, ulong guildId)
     {
-        var title = MessageFormatter.NeutraliseMassMentions(MessageFormatter.EscapeMarkdown(e.Title));
+        // Inside a link's text Discord shows "\[" as typed, so brackets become look-alikes instead of escapes.
+        var title = MessageFormatter.NeutraliseMassMentions(
+            MessageFormatter.EscapeMarkdown(e.Title.Replace('[', '［').Replace(']', '］')));
         var start = e.Start.ToUnixTimeSeconds();
         var link = $"https://discord.com/channels/{guildId}/{e.ChannelId}/{e.MessageId}";
         return $"• [{title}]({link}) — <t:{start}:F> · <t:{start}:R>";

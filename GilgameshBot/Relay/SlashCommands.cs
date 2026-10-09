@@ -5,23 +5,26 @@ using Discord.WebSocket;
 using GilgameshBot.Calendar;
 using GilgameshBot.Roster;
 using GilgameshBot.Setup;
+using GilgameshBot.Weekly;
 
 namespace GilgameshBot.Relay;
 
 /// <summary>
-/// The bot's own Discord slash commands: <c>/setupcode</c>, <c>/relaystatus</c>, <c>/fcscan</c> and <c>/calendar</c>.
+/// The bot's own Discord slash commands: <c>/setupcode</c>, <c>/relaystatus</c>, <c>/fcscan</c>, <c>/calendar</c> and <c>/weekly</c>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The bot lives inside every officer's plugin, so every connected instance receives every
 /// interaction. Only the <em>leader</em> of the branch whose server the command came from answers,
-/// except for <c>/calendar</c>, which any connected plugin answers (the leader may be on a version
-/// without the calendar); the rest return immediately. Several may still try — two branches on one
-/// server, or <c>/calendar</c> — so an "already acknowledged" error is swallowed rather than logged.
+/// except for <c>/calendar</c> and <c>/weekly</c>, which any connected plugin answers (the leader may
+/// be on a version without them); the rest return immediately. Several may still try — two branches
+/// on one server, or <c>/calendar</c> and <c>/weekly</c> — so an "already acknowledged" error is
+/// swallowed rather than logged.
 /// </para>
 /// <para>
 /// Nothing here ever blocks the gateway task: the handler acknowledges with
-/// <see cref="SocketInteraction.DeferAsync"/> and does the work on a background task.
+/// <see cref="SocketInteraction.DeferAsync"/> and does the work on a background task. <c>/weekly</c>
+/// is the exception: it answers with the weekly's form, which must be the first answer.
 /// </para>
 /// <para>
 /// Who may run <c>/setupcode</c> is decided by Discord alone: the command is registered as
@@ -36,11 +39,14 @@ public sealed class SlashCommands
     public const string RelayStatusCommand = "relaystatus";
     public const string FcScanCommand = "fcscan";
     public const string CalendarCommand = "calendar";
+    public const string WeeklyCommand = "weekly";
 
     private const string SetupCodeDescription = "Get your GilgameshBot setup code as a direct message.";
     private const string RelayStatusDescription = "Show who is relaying Free Company chat right now.";
     private const string FcScanDescription = "Scan a Free Company's members on the Lodestone. Needs a member's plugin online.";
     private const string CalendarDescription = "Rename, retheme or refresh the Free Company calendar. Needs a member's plugin online.";
+    private const string WeeklyDescription = "Write The Fat Cat Weekly and send it for approval. Needs a member's plugin online.";
+    private const string DraftOption = "draft";
     private const string WorldOption = "world";
     private const string ThemeSubcommand = "theme";
     private const string ThemeOption = "theme";
@@ -57,6 +63,7 @@ public sealed class SlashCommands
     private readonly PresenceCoordinator coordinator;
     private readonly Func<Task<string>> characterLabelProvider;
     private readonly CalendarService calendar;
+    private readonly WeeklyService weekly;
 
     public SlashCommands(
         Configuration config,
@@ -65,7 +72,8 @@ public sealed class SlashCommands
         FcBranch branch,
         PresenceCoordinator coordinator,
         Func<Task<string>> characterLabelProvider,
-        CalendarService calendar)
+        CalendarService calendar,
+        WeeklyService weekly)
     {
         this.config = config;
         this.log = log;
@@ -74,6 +82,7 @@ public sealed class SlashCommands
         this.coordinator = coordinator;
         this.characterLabelProvider = characterLabelProvider;
         this.calendar = calendar;
+        this.weekly = weekly;
     }
 
     // --- Registration -------------------------------------------------------------------------
@@ -173,6 +182,11 @@ public sealed class SlashCommands
                 .WithName(RefreshSubcommand)
                 .WithDescription("Redraw the calendar now, with the latest Apollo events.")
                 .WithType(ApplicationCommandOptionType.SubCommand)))),
+        (WeeklyCommand, WeeklyDescription, () => Build(WeeklyCommand, WeeklyDescription, b => b.AddOption(new SlashCommandOptionBuilder()
+            .WithName(DraftOption)
+            .WithDescription("Preview only: nobody is notified and nothing is posted.")
+            .WithType(ApplicationCommandOptionType.Boolean)
+            .WithRequired(false)))),
     ];
 
     private static ApplicationCommandProperties Build(
@@ -210,15 +224,23 @@ public sealed class SlashCommands
     /// <summary>
     /// Entry point for <see cref="BaseSocketClient.SlashCommandExecuted"/>. Returns without
     /// touching Discord unless this instance is the one that should answer: the leader, or for
-    /// /calendar any connected plugin (the leader may be on a version without the calendar; the
+    /// /calendar and /weekly any connected plugin (the leader may be on a version without them; the
     /// first to acknowledge answers).
     /// </summary>
     public async Task HandleAsync(SocketSlashCommand command, CancellationToken ct)
     {
         var name = command.Data.Name;
         if (command.GuildId != branch.GuildId || ct.IsCancellationRequested
-            || (!coordinator.IsLeader && name != CalendarCommand))
+            || (!coordinator.IsLeader && name != CalendarCommand && name != WeeklyCommand))
             return;
+
+        // The weekly's form must be the first answer: no defer.
+        if (name == WeeklyCommand)
+        {
+            var draft = command.Data.Options.FirstOrDefault(o => o.Name == DraftOption)?.Value is true;
+            await weekly.HandleSlashAsync(command, draft, ct);
+            return;
+        }
 
         if (name != SetupCodeCommand && name != RelayStatusCommand && name != FcScanCommand && name != CalendarCommand)
             return;
