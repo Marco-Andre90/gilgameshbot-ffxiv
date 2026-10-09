@@ -173,6 +173,7 @@ public sealed class WeeklyService
     private async Task PreviewAsync(SocketModal modal, bool draft, ulong fillMessageId, WeeklySections sections, CancellationToken ct)
     {
         var options = new RequestOptions { CancelToken = ct };
+        string? previewed = null;
         try
         {
             if (sections.IsEmpty)
@@ -225,18 +226,18 @@ public sealed class WeeklyService
                 writeGate.Release();
             }
 
+            var link = $"https://discord.com/channels/{guildId}/{target.Approval.Id}/{preview.Id}";
+            previewed = draft
+                ? $"Draft previewed: {link}. Nothing is posted; delete it when you are done."
+                : $"Preview posted for approval: {link}.";
+            if (warning is not null)
+                previewed += "\n⚠️ " + warning;
+
             // The "Write the weekly" message has done its job.
             if (fillMessageId != 0)
                 await DeleteQuietlyAsync(target.Approval, fillMessageId, options);
 
-            var link = $"https://discord.com/channels/{guildId}/{target.Approval.Id}/{preview.Id}";
-            var reply = draft
-                ? $"Draft previewed: {link}. Nothing is posted; delete it when you are done."
-                : $"Preview posted for approval: {link}.";
-            if (warning is not null)
-                reply += "\n⚠️ " + warning;
-
-            await modal.FollowupAsync(reply, ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+            await modal.FollowupAsync(previewed, ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
         }
         catch (Exception ex)
         {
@@ -247,6 +248,15 @@ public sealed class WeeklyService
             {
                 // Own short timeout: on a disconnect the session's token is already cancelled.
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+                // The preview is out: only say where, never hand the text back for a second one.
+                if (previewed is not null)
+                {
+                    await modal.FollowupAsync(previewed, ephemeral: true, allowedMentions: AllowedMentions.None,
+                        options: new RequestOptions { CancelToken = cts.Token });
+                    return;
+                }
+
                 await GiveBackAsync(modal, ex switch
                 {
                     OperationCanceledException => "The plugin disconnected before the weekly was previewed.",
@@ -383,7 +393,7 @@ public sealed class WeeklyService
             if (await FreshAsync(preview, options) is not { } fresh)
                 return;
 
-            if (HasStatus(fresh) && !IsAbandoned(fresh))
+            if (HasStatus(fresh) && !IsAbandoned(fresh, component.CreatedAt))
             {
                 await component.FollowupAsync("This weekly is already being posted, or was posted or rejected.",
                     ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
@@ -397,6 +407,7 @@ public sealed class WeeklyService
                 p.AllowedMentions = AllowedMentions.None;
             }, options);
             claimed = true;
+            var claimedAt = System.Diagnostics.Stopwatch.StartNew();
 
             await Task.Delay(ClaimSettle, ct);
             if (await FreshAsync(preview, options) is not { } settled
@@ -429,9 +440,21 @@ public sealed class WeeklyService
                 var (last, latestIssue) = await LastWeeklyAsync(target.Announcement, options);
                 if (last is not null && last.Timestamp > preview.Timestamp)
                 {
-                    // A slower claim that lost the race: the winner has already said where it went.
-                    if (await FreshAsync(preview, options) is { } now2 && HasLine(now2, ApprovedLine))
+                    // A slower claim that lost the race: the winner has already said where it went, or
+                    // this very preview is what went out, and the line saying so was overwritten.
+                    if (await FreshAsync(preview, options) is { } current && HasLine(current, ApprovedLine))
                         return;
+
+                    if (SameSections(last, preview))
+                    {
+                        await component.ModifyOriginalResponseAsync(p =>
+                        {
+                            p.Content = $"{head}\n{ApprovedLine}Posted as Issue No. {latestIssue?.Number}, {Link(last)}";
+                            p.Components = new ComponentBuilder().Build();
+                            p.AllowedMentions = AllowedMentions.None;
+                        }, options);
+                        return;
+                    }
 
                     await component.ModifyOriginalResponseAsync(p =>
                     {
@@ -446,13 +469,31 @@ public sealed class WeeklyService
                 if (latestIssue?.Number != lastIssue?.Number)
                     throw new InvalidOperationException("The last issue changed while the weekly was being built.");
 
+                // Still ours? A slower click may have claimed it since; then it posts, not this one.
+                // And past the deadline another click may take it over: stop rather than overlap.
+                if (await FreshAsync(preview, options) is not { } stillOurs
+                    || !ApolloReader.CustomIds(stillOurs.Components).Contains(claim))
+                {
+                    claimed = false;
+                    return;
+                }
+
+                if (claimedAt.Elapsed > ClaimDeadline)
+                {
+                    await RestoreAsync(component, head, "it took too long to build", options);
+                    return;
+                }
+
                 ulong postedId;
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
+                    // Not cancelled by a disconnect: a send cut off halfway may still have gone out.
+                    using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     using var hook = new DiscordWebhookClient(webhook);
                     postedId = await hook.SendFilesAsync(attachments, text: null, embeds: embeds, username: WeeklyMessage.Name,
-                        avatarUrl: webhook.GetAvatarUrl(), options: options, allowedMentions: AllowedMentions.None);
+                        avatarUrl: webhook.GetAvatarUrl(), options: new RequestOptions { CancelToken = sendCts.Token },
+                        allowedMentions: AllowedMentions.None);
                 }
                 finally
                 {
@@ -507,8 +548,15 @@ public sealed class WeeklyService
             var options = new RequestOptions { CancelToken = ct };
 
             // Too late when it is posted, or being posted.
-            if (await FreshAsync(component.Message, options) is not { } fresh || HasStatus(fresh))
+            if (await FreshAsync(component.Message, options) is not { } fresh)
                 return;
+
+            if (HasStatus(fresh))
+            {
+                await component.FollowupAsync("This weekly is already being posted, or was posted or rejected.",
+                    ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
 
             var head = Head(component.Message.Content);
             await component.ModifyOriginalResponseAsync(p =>
@@ -537,6 +585,15 @@ public sealed class WeeklyService
             ? await ((IMessageChannel)channel).GetMessageAsync(preview.Id, CacheMode.AllowDownload, options)
             : null;
 
+    /// <summary>True when <paramref name="posted"/> carries the same officers' sections as <paramref name="preview"/>.</summary>
+    private static bool SameSections(IMessage posted, IMessage preview)
+    {
+        static IEnumerable<string> Key(IMessage m) =>
+            WeeklyMessage.Manual(m).Select(e => $"{e.Title}\u0001{e.Description}");
+
+        return Key(posted).SequenceEqual(Key(preview));
+    }
+
     /// <summary>True once a preview is being posted, posted or rejected.</summary>
     private static bool HasStatus(IMessage message) =>
         HasLine(message, ApproveLine) || HasLine(message, ApprovedLine) || HasLine(message, RejectedLine);
@@ -548,12 +605,16 @@ public sealed class WeeklyService
     /// A "posting" claim nobody finished: still only the claim, untouched for longer than any post
     /// takes. The plugin that made it crashed or lost its connection without putting the buttons back.
     /// </summary>
-    private static bool IsAbandoned(IMessage message) =>
+    /// <remarks><paramref name="clickedAt"/> is Discord's time of the click, not this PC's clock, which may be off.</remarks>
+    private static bool IsAbandoned(IMessage message, DateTimeOffset clickedAt) =>
         HasLine(message, ApproveLine) && !HasLine(message, ApprovedLine) && !HasLine(message, RejectedLine)
-        && DateTimeOffset.UtcNow - (message.EditedTimestamp ?? message.Timestamp) > AbandonedAfter;
+        && clickedAt - (message.EditedTimestamp ?? message.Timestamp) > AbandonedAfter;
 
     /// <summary>How long a "posting" claim may sit before another Approve may take it over.</summary>
     private static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(3);
+
+    /// <summary>A claimer that has not sent within this gives up, so a takeover never overlaps it.</summary>
+    private static readonly TimeSpan ClaimDeadline = TimeSpan.FromMinutes(2);
 
     /// <summary>Puts Approve / Reject back after a failed post, with the reason.</summary>
     private static Task RestoreAsync(SocketMessageComponent component, string head, string reason, RequestOptions options) =>
