@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Dalamud.Plugin.Services;
 using Discord;
@@ -48,6 +49,9 @@ public sealed class WeeklyService
     private readonly ulong guildId;
     private readonly CalendarService calendar;
     private readonly SemaphoreSlim writeGate = new(1, 1);
+
+    /// <summary>Previews and approvals under way, so a disconnect lets them finish their last edit first.</summary>
+    private readonly ConcurrentDictionary<Task, byte> jobs = new();
 
     /// <param name="guildId">This session's server, kept as an id (see <see cref="CalendarService"/>).</param>
     public WeeklyService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, CalendarService calendar)
@@ -163,7 +167,7 @@ public sealed class WeeklyService
             return;
         }
 
-        _ = Task.Run(() => PreviewAsync(modal, draft, fillMessageId, sections, ct), CancellationToken.None);
+        Track(() => PreviewAsync(modal, draft, fillMessageId, sections, ct));
     }
 
     private async Task PreviewAsync(SocketModal modal, bool draft, ulong fillMessageId, WeeklySections sections, CancellationToken ct)
@@ -234,18 +238,21 @@ public sealed class WeeklyService
 
             await modal.FollowupAsync(reply, ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
         }
-        catch (OperationCanceledException)
-        {
-            // Disconnecting; the interaction simply times out.
-        }
         catch (Exception ex)
         {
-            log.Warning(ex, "Previewing the weekly failed.");
+            if (ex is not OperationCanceledException)
+                log.Warning(ex, "Previewing the weekly failed.");
+
             try
             {
-                await GiveBackAsync(modal, IsForbiddenException(ex)
-                    ? "The bot is missing a permission in the weekly's channels."
-                    : "The weekly could not be previewed; see /xllog for details.", sections, options);
+                // Own short timeout: on a disconnect the session's token is already cancelled.
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await GiveBackAsync(modal, ex switch
+                {
+                    OperationCanceledException => "The plugin disconnected before the weekly was previewed.",
+                    _ when IsForbiddenException(ex) => "The bot is missing a permission in the weekly's channels.",
+                    _ => "The weekly could not be previewed; see /xllog for details.",
+                }, sections, new RequestOptions { CancelToken = cts.Token });
             }
             catch
             {
@@ -301,7 +308,7 @@ public sealed class WeeklyService
 
                 await component.DeferAsync(options: options);
                 var approve = id == WeeklyMessage.ApproveId;
-                _ = Task.Run(() => approve ? ApproveAsync(component, ct) : RejectAsync(component, ct), CancellationToken.None);
+                Track(() => approve ? ApproveAsync(component, ct) : RejectAsync(component, ct));
                 return;
             }
 
@@ -315,12 +322,12 @@ public sealed class WeeklyService
                 }
 
                 await component.DeferAsync(options: options);
-                await component.Message.DeleteAsync(options);
+                Track(() => DeleteDraftAsync(component, ct));
             }
         }
-        catch (HttpException ex) when (IsLostRace(ex) || ex.HttpCode == System.Net.HttpStatusCode.NotFound)
+        catch (HttpException ex) when (IsLostRace(ex))
         {
-            // Another member's plugin answered first, or the message is already gone.
+            // Another member's plugin answered first.
         }
         catch (OperationCanceledException)
         {
@@ -332,22 +339,65 @@ public sealed class WeeklyService
         }
     }
 
+    private async Task DeleteDraftAsync(SocketMessageComponent component, CancellationToken ct)
+    {
+        try
+        {
+            await component.Message.DeleteAsync(new RequestOptions { CancelToken = ct });
+        }
+        catch (HttpException ex) when (ex.HttpCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Already gone: another plugin, or a second click.
+        }
+        catch (OperationCanceledException)
+        {
+            // Disconnecting.
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Deleting a weekly draft failed.");
+        }
+    }
+
+    /// <summary>
+    /// Approve. Every plugin receives every click, and two approvers may click at once, so a post
+    /// is claimed on the preview first: the claimer's custom id goes on a disabled "Posting…"
+    /// button, and after a pause only the plugin whose claim is still there goes on (the last
+    /// write wins, so exactly one does). The announcement channel is checked once more right
+    /// before sending.
+    /// </summary>
     private async Task ApproveAsync(SocketMessageComponent component, CancellationToken ct)
     {
         var options = new RequestOptions { CancelToken = ct };
         var preview = component.Message;
         var who = component.User.Mention;
         var head = Head(preview.Content);
+        var claim = WeeklyMessage.ClaimId(component.Id);
+        var claimed = false;
+        string? posted = null;
 
         try
         {
-            // First of all, take the buttons away: a second approver must not start a second post.
+            // Settled already (posted, rejected, or another approver is posting): nothing to do.
+            if (await FreshAsync(preview, options) is not { } fresh || HasStatus(fresh))
+                return;
+
             await component.ModifyOriginalResponseAsync(p =>
             {
                 p.Content = $"{head}\n{ApproveLine}Approved by {who}; posting…";
-                p.Components = new ComponentBuilder().Build();
+                p.Components = WeeklyMessage.Posting(claim);
                 p.AllowedMentions = AllowedMentions.None;
             }, options);
+            claimed = true;
+
+            await Task.Delay(ClaimSettle, ct);
+            if (await FreshAsync(preview, options) is not { } settled
+                || !ApolloReader.CustomIds(settled.Components).Contains(claim))
+            {
+                // Another click won, or the preview was rejected meanwhile: theirs to finish.
+                claimed = false;
+                return;
+            }
 
             await writeGate.WaitAsync(ct);
             try
@@ -359,24 +409,30 @@ public sealed class WeeklyService
                     return;
                 }
 
-                var (last, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
+                var now = DateTimeOffset.UtcNow;
+                var (_, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
+                var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
+                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), issue, now, ct);
+
+                var webhook = await WebhookAsync(target.Announcement, create: true, options)
+                              ?? throw new InvalidOperationException("The webhook could not be created.");
+
+                // Last look before sending: building took a few seconds.
+                var (last, latestIssue) = await LastWeeklyAsync(target.Announcement, options);
                 if (last is not null && last.Timestamp > preview.Timestamp)
                 {
                     await component.ModifyOriginalResponseAsync(p =>
                     {
                         p.Content = $"{head}\n{ApprovedLine}Approved by {who}, but {Link(last)} went out after this preview was written, "
                                     + "so it was not posted. Write a new one if it should still go out.";
+                        p.Components = new ComponentBuilder().Build();
                         p.AllowedMentions = AllowedMentions.None;
                     }, options);
                     return;
                 }
 
-                var now = DateTimeOffset.UtcNow;
-                var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), issue, now, ct);
-
-                var webhook = await WebhookAsync(target.Announcement, create: true, options)
-                              ?? throw new InvalidOperationException("The webhook could not be created.");
+                if (latestIssue?.Number != lastIssue?.Number)
+                    throw new InvalidOperationException("The last issue changed while the weekly was being built.");
 
                 ulong postedId;
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
@@ -384,7 +440,7 @@ public sealed class WeeklyService
                 {
                     using var hook = new DiscordWebhookClient(webhook);
                     postedId = await hook.SendFilesAsync(attachments, text: null, embeds: embeds, username: WeeklyMessage.Name,
-                        options: options, allowedMentions: AllowedMentions.None);
+                        avatarUrl: webhook.GetAvatarUrl(), options: options, allowedMentions: AllowedMentions.None);
                 }
                 finally
                 {
@@ -393,11 +449,13 @@ public sealed class WeeklyService
                 }
 
                 var link = $"https://discord.com/channels/{guildId}/{target.Announcement.Id}/{postedId}";
+                posted = $"{head}\n{ApprovedLine}Approved by {who}: posted as Issue No. {issue.Number}, {link}";
                 log.Information("Posted The Fat Cat Weekly issue {Issue} in #{Channel}.", issue.Number, target.Announcement.Name);
 
                 await component.ModifyOriginalResponseAsync(p =>
                 {
-                    p.Content = $"{head}\n{ApprovedLine}Approved by {who}: posted as Issue No. {issue.Number}, {link}";
+                    p.Content = posted;
+                    p.Components = new ComponentBuilder().Build();
                     p.AllowedMentions = AllowedMentions.None;
                 }, options);
             }
@@ -406,20 +464,27 @@ public sealed class WeeklyService
                 writeGate.Release();
             }
         }
-        catch (OperationCanceledException)
-        {
-            await RestoreQuietlyAsync(component, head, "the plugin disconnected before it was posted");
-        }
-        catch (CalendarSourceException ex)
-        {
-            await RestoreQuietlyAsync(component, head, ex.Message);
-        }
         catch (Exception ex)
         {
-            log.Warning(ex, "Posting the weekly failed.");
-            await RestoreQuietlyAsync(component, head, IsForbiddenException(ex)
-                ? "the bot is missing a permission in the weekly's channels"
-                : "see /xllog of the plugin that tried");
+            if (ex is not OperationCanceledException and not CalendarSourceException)
+                log.Warning(ex, "Posting the weekly failed.");
+
+            if (posted is not null)
+            {
+                // It went out: never offer the buttons again, only say so.
+                await EditQuietlyAsync(component, posted, new ComponentBuilder().Build());
+            }
+            else if (claimed)
+            {
+                var reason = ex switch
+                {
+                    OperationCanceledException => "the plugin disconnected before it was posted",
+                    CalendarSourceException source => source.Message,
+                    _ when IsForbiddenException(ex) => "the bot is missing a permission in the weekly's channels",
+                    _ => "see /xllog of the plugin that tried",
+                };
+                await EditQuietlyAsync(component, $"{head}\n{FailedLine}: {reason.TrimEnd('.')}. Try again.", WeeklyMessage.PreviewButtons(false, 0));
+            }
         }
     }
 
@@ -427,13 +492,19 @@ public sealed class WeeklyService
     {
         try
         {
+            var options = new RequestOptions { CancelToken = ct };
+
+            // Too late when it is posted, or being posted.
+            if (await FreshAsync(component.Message, options) is not { } fresh || HasStatus(fresh))
+                return;
+
             var head = Head(component.Message.Content);
             await component.ModifyOriginalResponseAsync(p =>
             {
                 p.Content = $"{head}\n{RejectedLine}Rejected by {component.User.Mention}. Nothing was posted.";
                 p.Components = new ComponentBuilder().Build();
                 p.AllowedMentions = AllowedMentions.None;
-            }, new RequestOptions { CancelToken = ct });
+            }, options);
         }
         catch (OperationCanceledException)
         {
@@ -445,6 +516,22 @@ public sealed class WeeklyService
         }
     }
 
+    /// <summary>How long a claim on a preview is left to settle before the claimer looks again.</summary>
+    private static readonly TimeSpan ClaimSettle = TimeSpan.FromSeconds(2);
+
+    /// <summary>The preview as it is now in Discord; null when it was deleted.</summary>
+    private async Task<IMessage?> FreshAsync(IMessage preview, RequestOptions options) =>
+        await CalendarChannels.ResolveAsync(client, preview.Channel.Id, options) is { } channel
+            ? await ((IMessageChannel)channel).GetMessageAsync(preview.Id, CacheMode.AllowDownload, options)
+            : null;
+
+    /// <summary>True once a preview is being posted, posted or rejected.</summary>
+    private static bool HasStatus(IMessage message) =>
+        message.Content.Split('\n').Any(line =>
+            line.StartsWith(ApproveLine, StringComparison.Ordinal)
+            || line.StartsWith(ApprovedLine, StringComparison.Ordinal)
+            || line.StartsWith(RejectedLine, StringComparison.Ordinal));
+
     /// <summary>Puts Approve / Reject back after a failed post, with the reason.</summary>
     private static Task RestoreAsync(SocketMessageComponent component, string head, string reason, RequestOptions options) =>
         component.ModifyOriginalResponseAsync(p =>
@@ -454,16 +541,22 @@ public sealed class WeeklyService
             p.AllowedMentions = AllowedMentions.None;
         }, options);
 
-    private async Task RestoreQuietlyAsync(SocketMessageComponent component, string head, string reason)
+    /// <summary>Last word on a preview, with its own short timeout: the session's may be cancelled already.</summary>
+    private async Task EditQuietlyAsync(SocketMessageComponent component, string content, MessageComponent buttons)
     {
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await RestoreAsync(component, head, reason, new RequestOptions { CancelToken = cts.Token });
+            await component.ModifyOriginalResponseAsync(p =>
+            {
+                p.Content = content;
+                p.Components = buttons;
+                p.AllowedMentions = AllowedMentions.None;
+            }, new RequestOptions { CancelToken = cts.Token });
         }
         catch (Exception ex)
         {
-            log.Debug(ex, "Could not put the weekly preview's buttons back.");
+            log.Debug(ex, "Could not update the weekly preview.");
         }
     }
 
@@ -521,11 +614,13 @@ public sealed class WeeklyService
             await writeGate.WaitAsync(ct);
             try
             {
-                if (await WebhookAsync(target.Announcement, create: false, options) is not { } webhook)
+                var (last, issue) = await LastWeeklyAsync(target.Announcement, options);
+                if (last is null || issue is null || DateTimeOffset.UtcNow - last.Timestamp >= TimeSpan.FromDays(7))
                     return;
 
-                var (last, issue) = await LastWeeklyAsync(target.Announcement, options);
-                if (last is null || issue is null || last.Author.Id != webhook.Id || DateTimeOffset.UtcNow - last.Timestamp >= TimeSpan.FromDays(7))
+                // Only a weekly the bot's own webhook posted can be edited.
+                var webhook = (await BotWebhooksAsync(target.Announcement, options)).FirstOrDefault(h => h.Id == last.Author.Id);
+                if (webhook is null)
                     return;
 
                 var events = await EventsAsync(ct);
@@ -614,10 +709,9 @@ public sealed class WeeklyService
     /// </summary>
     private async Task<IWebhook?> WebhookAsync(ITextChannel channel, bool create, RequestOptions options)
     {
-        var botId = client.CurrentUser.Id;
-        var ours = (await channel.GetWebhooksAsync(options))
-            .Where(h => h.Creator?.Id == botId && !string.IsNullOrEmpty(h.Token))
+        var ours = (await BotWebhooksAsync(channel, options))
             .OrderByDescending(h => h.Name == WeeklyMessage.Name)
+            .ThenBy(h => h.Id)
             .FirstOrDefault();
 
         if (!create)
@@ -641,6 +735,35 @@ public sealed class WeeklyService
         }
 
         return ours;
+    }
+
+    /// <summary>The webhooks the bot created in <paramref name="channel"/> and can post with.</summary>
+    private async Task<List<IWebhook>> BotWebhooksAsync(ITextChannel channel, RequestOptions options)
+    {
+        var botId = client.CurrentUser.Id;
+        return (await channel.GetWebhooksAsync(options))
+            .Where(h => h.Creator?.Id == botId && !string.IsNullOrEmpty(h.Token))
+            .ToList();
+    }
+
+    /// <summary>Runs <paramref name="work"/> off the gateway task, tracked so a disconnect can wait for it.</summary>
+    private void Track(Func<Task> work)
+    {
+        var task = Task.Run(work, CancellationToken.None);
+        jobs[task] = 0;
+        _ = task.ContinueWith(t => jobs.TryRemove(t, out _), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Waits, at most <paramref name="timeout"/>, for previews and approvals under way. Called on
+    /// disconnect after the session's token is cancelled and before the client stops, so they can
+    /// still hand an officer's text back or put a preview's buttons back.
+    /// </summary>
+    public async Task DrainAsync(TimeSpan timeout)
+    {
+        var pending = jobs.Keys.ToList();
+        if (pending.Count > 0)
+            await Task.WhenAny(Task.WhenAll(pending), Task.Delay(timeout));
     }
 
     private static string Link(IMessage message) =>

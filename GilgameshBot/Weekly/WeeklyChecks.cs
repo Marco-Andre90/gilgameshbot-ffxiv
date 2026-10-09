@@ -67,10 +67,10 @@ internal static class WeeklyChecks
         if (guild.GetRole(roleId) is not { } role)
             return (null, "The weekly's approver role was not found on its server.");
 
-        // Otherwise the preview names the role without notifying anybody.
+        // Otherwise the preview would name the role without notifying anybody.
         if (!role.IsMentionable && !perms.MentionEveryone)
-            return (null, $"The bot cannot notify @{role.Name}: make the role mentionable (Server Settings → Roles), "
-                          + "or give the bot Mention @everyone, @here and All Roles in the approval channel.");
+            return (null, $"The bot cannot notify @{role.Name}: turn on \"Allow anyone to @mention this role\" for it "
+                          + "(Server Settings → Roles).");
 
         foreach (var id in config.ApolloChannelIds.ToList())
         {

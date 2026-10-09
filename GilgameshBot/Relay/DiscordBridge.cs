@@ -42,6 +42,9 @@ public sealed class DiscordBridge : IDisposable
     /// <summary>Budget for the two REST calls of a clean handoff, inside <see cref="DisposeTimeout"/>.</summary>
     private static readonly TimeSpan ResignTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StaleMessageAge = TimeSpan.FromMinutes(5);
+
+    /// <summary>Budget for the weekly's jobs to finish on teardown, inside <see cref="DisposeTimeout"/>.</summary>
+    private static readonly TimeSpan WeeklyDrainTimeout = TimeSpan.FromSeconds(2);
     private const int QueueCapacity = 200;
 
     private readonly Configuration config;
@@ -947,6 +950,13 @@ public sealed class DiscordBridge : IDisposable
         if (s.WeeklyLoop is { } weeklyLoop)
         {
             try { await weeklyLoop; } catch { /* it logs its own errors */ }
+        }
+
+        // A preview or an approval under way gets its last word in (the officer's text handed
+        // back, the preview's buttons put back) while the client still works.
+        if (s.Weekly is { } weekly)
+        {
+            try { await weekly.DrainAsync(WeeklyDrainTimeout); } catch { /* they log their own errors */ }
         }
 
         // Hand off: drop our presence message so a peer can take the head of the queue, and find

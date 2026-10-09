@@ -1476,9 +1476,8 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.InputText("Approver role ID", ref weeklyRoleIdBuffer, 32);
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
-            "Mentioned on every preview; its members approve or reject it. Make the role mentionable, or give the bot "
-            + "Mention @everyone, @here and All Roles in the approval channel. Copy its ID with Developer Mode on: "
-            + "Server Settings → Roles → right-click the role.");
+            "Mentioned on every preview; its members approve or reject it. Turn on \"Allow anyone to @mention this role\" "
+            + "for it. Copy its ID with Developer Mode on: Server Settings → Roles → right-click the role.");
 
         ImGuiHelpers.ScaledDummy(4);
 

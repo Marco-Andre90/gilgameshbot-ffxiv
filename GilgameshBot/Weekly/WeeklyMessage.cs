@@ -52,6 +52,7 @@ public static partial class WeeklyMessage
     public const string ApproveId = Prefix + "approve";
     public const string RejectId = Prefix + "reject";
     public const string DeleteId = Prefix + "delete:";
+    private const string ClaimPrefix = Prefix + "claim:";
 
     private const string GameField = "game";
     private const string FcField = "fc";
@@ -131,11 +132,12 @@ public static partial class WeeklyMessage
     /// <summary>Trimmed, capped, and never a mass mention. Officers' markdown is kept: it is theirs to format.</summary>
     private static string Clean(string? text, int max)
     {
-        var trimmed = (text ?? string.Empty).Replace("\r\n", "\n").Trim();
+        // Neutralised first: it adds characters, and the cap keeps the message within Discord's limit.
+        var trimmed = MessageFormatter.NeutraliseMassMentions((text ?? string.Empty).Replace("\r\n", "\n").Trim());
         if (trimmed.Length > max)
             trimmed = trimmed[..(char.IsHighSurrogate(trimmed[max - 1]) ? max - 1 : max)];
 
-        return MessageFormatter.NeutraliseMassMentions(trimmed);
+        return trimmed;
     }
 
     /// <summary>The sections as text, to hand back to an officer when their weekly could not be previewed.</summary>
@@ -329,6 +331,13 @@ public static partial class WeeklyMessage
                 .WithButton("Approve", ApproveId, ButtonStyle.Success)
                 .WithButton("Reject", RejectId, ButtonStyle.Danger)
                 .Build();
+
+    /// <summary>The id an approval claims a preview with: unique per click.</summary>
+    public static string ClaimId(ulong interactionId) => ClaimPrefix + interactionId;
+
+    /// <summary>The preview's only button while it is being posted: disabled, carrying the claim.</summary>
+    public static MessageComponent Posting(string claim) =>
+        new ComponentBuilder().WithButton("Posting…", claim, ButtonStyle.Secondary, disabled: true).Build();
 
     /// <summary>The author of a draft, from its Delete draft button; null for other ids.</summary>
     public static ulong? DraftAuthor(string customId) =>
