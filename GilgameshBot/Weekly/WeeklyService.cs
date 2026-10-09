@@ -341,7 +341,7 @@ public sealed class WeeklyService
             {
                 if (component.User.Id != author && !isApprover)
                 {
-                    await component.RespondAsync("Only the draft's author or the FC leader can delete it.",
+                    await component.RespondAsync("Only its author or the FC leader can delete it.",
                         ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
                     return;
                 }
@@ -478,7 +478,7 @@ public sealed class WeeklyService
                         await component.ModifyOriginalResponseAsync(p =>
                         {
                             p.Content = $"{head}\n{ApprovedLine}Posted as Issue No. {latestIssue?.Number}, {Link(last)}";
-                            p.Components = new ComponentBuilder().Build();
+                            p.Components = WeeklyMessage.DeleteButton(WeeklyMessage.AuthorOf(preview), draft: false);
                             p.AllowedMentions = AllowedMentions.None;
                         }, options);
                         return;
@@ -488,7 +488,7 @@ public sealed class WeeklyService
                     {
                         p.Content = $"{head}\n{ApprovedLine}Approved by {who}, but {Link(last)} went out after this preview was written, "
                                     + "so it was not posted. Write a new one if it should still go out.";
-                        p.Components = new ComponentBuilder().Build();
+                        p.Components = WeeklyMessage.DeleteButton(WeeklyMessage.AuthorOf(preview), draft: false);
                         p.AllowedMentions = AllowedMentions.None;
                     }, options);
                     return;
@@ -537,7 +537,7 @@ public sealed class WeeklyService
                 await component.ModifyOriginalResponseAsync(p =>
                 {
                     p.Content = posted;
-                    p.Components = new ComponentBuilder().Build();
+                    p.Components = WeeklyMessage.DeleteButton(WeeklyMessage.AuthorOf(preview), draft: false);
                     p.AllowedMentions = AllowedMentions.None;
                 }, options);
             }
@@ -554,7 +554,7 @@ public sealed class WeeklyService
             if (posted is not null)
             {
                 // It went out: never offer the buttons again, only say so.
-                await EditQuietlyAsync(component, posted, new ComponentBuilder().Build());
+                await EditQuietlyAsync(component, posted, WeeklyMessage.DeleteButton(WeeklyMessage.AuthorOf(preview), draft: false));
             }
             else if (claimed)
             {
@@ -591,7 +591,7 @@ public sealed class WeeklyService
             await component.ModifyOriginalResponseAsync(p =>
             {
                 p.Content = $"{head}\n{RejectedLine}Rejected by {component.User.Mention}. Nothing was posted.";
-                p.Components = new ComponentBuilder().Build();
+                p.Components = WeeklyMessage.DeleteButton(WeeklyMessage.AuthorOf(component.Message), draft: false);
                 p.AllowedMentions = AllowedMentions.None;
             }, options);
         }

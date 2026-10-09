@@ -355,11 +355,25 @@ public static partial class WeeklyMessage
     /// <summary>Approve / Reject on a preview; Delete draft on a draft.</summary>
     public static MessageComponent PreviewButtons(bool draft, ulong authorId) =>
         draft
-            ? new ComponentBuilder().WithButton("Delete draft", DeleteId + authorId, ButtonStyle.Secondary).Build()
+            ? DeleteButton(authorId, draft: true)
             : new ComponentBuilder()
                 .WithButton("Approve", ApproveId, ButtonStyle.Success)
                 .WithButton("Reject", RejectId, ButtonStyle.Danger)
                 .Build();
+
+    /// <summary>
+    /// Delete draft, or Delete preview on a preview that was posted or rejected, so the approval
+    /// channel can be kept clean. For the author (carried in the id) or the FC leader.
+    /// </summary>
+    public static MessageComponent DeleteButton(ulong authorId, bool draft) =>
+        new ComponentBuilder().WithButton(draft ? "Delete draft" : "Delete preview", DeleteId + authorId, ButtonStyle.Secondary).Build();
+
+    [GeneratedRegex(@"\bby <@!?(\d{1,20})>")]
+    private static partial Regex AuthorRegex();
+
+    /// <summary>Who wrote a preview, from its text ("written by @someone"); 0 when it cannot be read.</summary>
+    public static ulong AuthorOf(IMessage preview) =>
+        AuthorRegex().Match(preview.Content) is { Success: true } m && ulong.TryParse(m.Groups[1].Value, out var id) ? id : 0;
 
     /// <summary>The id an approval claims a preview with: unique per click.</summary>
     public static string ClaimId(ulong interactionId) => ClaimPrefix + interactionId;
