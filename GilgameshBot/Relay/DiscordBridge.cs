@@ -380,10 +380,17 @@ public sealed class DiscordBridge : IDisposable
 
     /// <summary>
     /// <c>v0.11.0</c>: the release workflow stamps the version into the assembly
-    /// (<c>-p:Version=x.y.z.0</c>), so the fourth part is dropped.
+    /// (<c>-p:Version=x.y.z.0</c>), so the fourth part is dropped. A build made anywhere else
+    /// (a dev plugin) keeps the csproj's placeholder version and says so: <c>v0.1.0-dev</c>.
     /// </summary>
     private static readonly string PluginVersion =
-        typeof(DiscordBridge).Assembly.GetName().Version is { } v ? $"v{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+        typeof(DiscordBridge).Assembly.GetName().Version is { } v ? $"v{v.Major}.{v.Minor}.{v.Build}{DevSuffix}" : string.Empty;
+
+#if DEV_BUILD
+    private const string DevSuffix = "-dev";
+#else
+    private const string DevSuffix = "";
+#endif
 
     private async Task AnnounceOnlineAsync(Session s, SocketTextChannel textChannel)
     {

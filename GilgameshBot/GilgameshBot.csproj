@@ -26,6 +26,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!--
+    Builds outside GitHub Actions (dev plugins) announce their version with a "-dev" suffix, so a
+    test build is never mistaken for a release. Actions sets GITHUB_ACTIONS=true.
+  -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' != 'true'">
+    <DefineConstants>$(DefineConstants);DEV_BUILD</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Discord gateway + REST client. Pulls in Discord.Net.Core and Discord.Net.Rest. -->
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
