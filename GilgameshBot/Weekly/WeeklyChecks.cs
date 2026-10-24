@@ -112,9 +112,16 @@ internal static class WeeklyChecks
                 return (null, "The weekly's screenshot channel was not found on the weekly's server, or the bot cannot see it.");
 
             // Without Read Message History Discord answers an empty list, not an error.
-            if (CalendarChannels.Permissions(client, found) is not { ViewChannel: true, ReadMessageHistory: true })
-                return (null, "The bot needs View Channel and Read Message History in the weekly's screenshot channel "
-                              + "(for a thread, in its parent channel).");
+            var screenshotPerms = CalendarChannels.Permissions(client, found);
+            if (screenshotPerms is not { ViewChannel: true, ReadMessageHistory: true })
+            {
+                // Named, so a channel override that denies one of them can be found.
+                var missing = screenshotPerms is not { } p
+                    ? "View Channel and Read Message History"
+                    : string.Join(" and ", new[] { p.ViewChannel ? null : "View Channel", p.ReadMessageHistory ? null : "Read Message History" }.OfType<string>());
+                return (null, $"The bot is missing {missing} in #{found.Name}, the weekly's screenshot channel "
+                              + "(check that channel's permission overrides; for a thread, its parent channel's).");
+            }
 
             screenshots = found;
         }

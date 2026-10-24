@@ -52,6 +52,7 @@ public static partial class WeeklyMessage
     public const string ApproveId = Prefix + "approve";
     public const string RejectId = Prefix + "reject";
     public const string DeleteId = Prefix + "delete:";
+    public const string ScreenshotMenuId = Prefix + "shot";
     private const string ClaimPrefix = Prefix + "claim:";
 
     private const string GameField = "game";
@@ -169,12 +170,21 @@ public static partial class WeeklyMessage
     /// The Screenshot of the Week's embed, linking to the post it came from and crediting its
     /// author (a mention inside an embed never notifies). Its picture is put in by <see cref="Assemble"/>.
     /// </summary>
-    public static EmbedBuilder Screenshot(WeeklyScreenshotPick pick, ulong guildId) =>
+    public static EmbedBuilder Screenshot(WeeklyScreenshotCandidate shot, ulong guildId) =>
         new EmbedBuilder()
             .WithTitle(ScreenshotTitle)
-            .WithUrl($"https://discord.com/channels/{guildId}/{pick.Post.Channel.Id}/{pick.Post.Id}")
-            .WithDescription($"📸 by <@{pick.Post.Author.Id}> · {pick.Reactions} reaction{(pick.Reactions == 1 ? "" : "s")}")
+            .WithUrl($"https://discord.com/channels/{guildId}/{shot.Post.Channel.Id}/{shot.Post.Id}")
+            .WithDescription($"📸 by <@{shot.Post.Author.Id}> · {Reactions(shot.Reactions)}")
             .WithColor(ScreenshotColor);
+
+    private static string Reactions(int count) => count == 1 ? "1 reaction" : $"{count} reactions";
+
+    /// <summary><paramref name="manual"/> without the Screenshot of the Week.</summary>
+    public static List<EmbedBuilder> WithoutScreenshot(List<EmbedBuilder> manual)
+    {
+        manual.RemoveAll(b => b.Title == ScreenshotTitle);
+        return manual;
+    }
 
     /// <summary><paramref name="manual"/> with <paramref name="screenshot"/> in its place: last, but before "The Fat Cat says:".</summary>
     public static List<EmbedBuilder> WithScreenshot(List<EmbedBuilder> manual, EmbedBuilder screenshot)
@@ -386,21 +396,82 @@ public static partial class WeeklyMessage
         return warning is null ? text : $"{text}\n⚠️ {warning}";
     }
 
-    /// <summary>Approve / Reject on a preview; Delete draft on a draft.</summary>
-    public static MessageComponent PreviewButtons(bool draft, ulong authorId) =>
-        draft
-            ? DeleteButton(authorId, draft: true)
+    /// <summary>
+    /// Approve / Reject on a preview; Delete draft on a draft. With <paramref name="screenshots"/>,
+    /// a menu under them to pick another Screenshot of the Week (or none), <paramref name="selected"/> shown.
+    /// </summary>
+    public static MessageComponent PreviewButtons(bool draft, ulong authorId,
+        IReadOnlyList<WeeklyScreenshotCandidate>? screenshots = null, string? selected = null)
+    {
+        var builder = draft
+            ? new ComponentBuilder().WithButton(DeleteLabel(true), DeleteId + authorId, ButtonStyle.Secondary)
             : new ComponentBuilder()
                 .WithButton("Approve", ApproveId, ButtonStyle.Success)
-                .WithButton("Reject", RejectId, ButtonStyle.Danger)
-                .Build();
+                .WithButton("Reject", RejectId, ButtonStyle.Danger);
+
+        if (screenshots is { Count: > 0 })
+        {
+            var menu = new SelectMenuBuilder()
+                .WithCustomId(ScreenshotMenuId)
+                .WithPlaceholder("Screenshot of the Week…");
+
+            // A menu holds 25 options: the best 24 pictures and "none".
+            foreach (var c in screenshots.Take(24))
+            {
+                var name = (c.Post.Author as IGuildUser)?.DisplayName ?? c.Post.Author.GlobalName ?? c.Post.Author.Username;
+                var label = $"{name} · {Reactions(c.Reactions)}";
+                var description = (c.Pictures > 1 ? $"Image {c.Index + 1} of {c.Pictures} · " : "")
+                                  + "posted " + c.Post.Timestamp.UtcDateTime.ToString("MMM d", CultureInfo.InvariantCulture);
+                menu.AddOption(Cap(label), c.Value, Cap(description), isDefault: c.Value == selected);
+            }
+
+            menu.AddOption("No screenshot", WeeklyScreenshot.NoneValue, "Leave the section out", isDefault: selected == WeeklyScreenshot.NoneValue);
+            builder.WithSelectMenu(menu, row: 1);
+        }
+
+        return builder.Build();
+    }
+
+    /// <summary>Menu labels and descriptions hold 100 characters.</summary>
+    private static string Cap(string text) => text.Length <= 100 ? text : text[..99] + "…";
+
+    /// <summary>A preview's buttons and menu as they are, with <paramref name="selected"/> shown in the screenshot menu.</summary>
+    public static MessageComponent Rechoose(IMessage preview, string selected)
+    {
+        var builder = new ComponentBuilder();
+        var row = 0;
+        foreach (var r in preview.Components.OfType<ActionRowComponent>())
+        {
+            foreach (var c in r.Components)
+            {
+                switch (c)
+                {
+                    case ButtonComponent button:
+                        builder.WithButton(button.ToBuilder(), row);
+                        break;
+                    case SelectMenuComponent menu:
+                        var copy = menu.ToBuilder();
+                        foreach (var o in copy.Options)
+                            o.IsDefault = o.Value == selected;
+                        builder.WithSelectMenu(copy, row);
+                        break;
+                }
+            }
+
+            row++;
+        }
+
+        return builder.Build();
+    }
 
     /// <summary>
     /// Delete draft, or Delete preview on a preview that was posted or rejected, so the approval
     /// channel can be kept clean. For the author (carried in the id) or the FC leader.
     /// </summary>
     public static MessageComponent DeleteButton(ulong authorId, bool draft) =>
-        new ComponentBuilder().WithButton(draft ? "Delete draft" : "Delete preview", DeleteId + authorId, ButtonStyle.Secondary).Build();
+        new ComponentBuilder().WithButton(DeleteLabel(draft), DeleteId + authorId, ButtonStyle.Secondary).Build();
+
+    private static string DeleteLabel(bool draft) => draft ? "Delete draft" : "Delete preview";
 
     [GeneratedRegex(@"\bby <@!?(\d{1,20})>")]
     private static partial Regex AuthorRegex();

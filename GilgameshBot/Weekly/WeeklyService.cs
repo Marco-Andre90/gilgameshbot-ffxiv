@@ -191,14 +191,20 @@ public sealed class WeeklyService
                 return;
             }
 
-            // Picked once, here: approving posts the picture the preview carries.
+            // Picked here, or from the preview's menu: approving posts the picture the preview carries.
             var manual = WeeklyMessage.Manual(sections);
             WeeklyScreenshotFile? screenshot = null;
-            if (target.Screenshots is { } screenshots
-                && await WeeklyScreenshot.PickAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), options, ct) is { } pick)
+            List<WeeklyScreenshotCandidate> candidates = [];
+            var selected = WeeklyScreenshot.NoneValue;
+            if (target.Screenshots is { } screenshots)
             {
-                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick, guildId));
-                screenshot = pick.File;
+                candidates = await WeeklyScreenshot.CandidatesAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), log, options);
+                if (await WeeklyScreenshot.PickAsync(candidates, log, ct) is { } pick)
+                {
+                    manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
+                    screenshot = pick.File;
+                    selected = pick.Candidate.Value;
+                }
             }
 
             await writeGate.WaitAsync(ct);
@@ -227,7 +233,7 @@ public sealed class WeeklyService
                     previewId = await hook.SendFilesAsync(attachments,
                         WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Leader, warning),
                         embeds: embeds, username: WeeklyMessage.Name, avatarUrl: webhook.GetAvatarUrl(), options: options,
-                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id),
+                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id, candidates, selected),
                         threadId: target.ApprovalThreadId);
                 }
                 finally
@@ -330,6 +336,20 @@ public sealed class WeeklyService
             var leaderId = config.FcLeaderId;
             var isApprover = leaderId != 0 && component.User.Id == leaderId;
 
+            if (id == WeeklyMessage.ScreenshotMenuId)
+            {
+                if (component.User.Id != WeeklyMessage.AuthorOf(component.Message) && !isApprover)
+                {
+                    await component.RespondAsync("Only its author or the FC leader can change the screenshot.",
+                        ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                    return;
+                }
+
+                await component.DeferAsync(options: options);
+                Track(() => ChangeScreenshotAsync(component, ct));
+                return;
+            }
+
             if (id is WeeklyMessage.ApproveId or WeeklyMessage.RejectId)
             {
                 if (!isApprover)
@@ -399,6 +419,89 @@ public sealed class WeeklyService
             {
                 await component.FollowupAsync("The draft could not be deleted; see /xllog of the plugin that tried.", ephemeral: true,
                     allowedMentions: AllowedMentions.None, options: options);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    /// <summary>
+    /// The preview's screenshot menu: rebuilds the preview with the chosen picture, or none, while
+    /// it is still waiting for approval. The menu keeps the other choices, so it can be changed again.
+    /// </summary>
+    private async Task ChangeScreenshotAsync(SocketMessageComponent component, CancellationToken ct)
+    {
+        var options = new RequestOptions { CancelToken = ct };
+        var value = component.Data.Values?.FirstOrDefault() ?? WeeklyScreenshot.NoneValue;
+        try
+        {
+            // Too late once it is being posted, posted or rejected.
+            if (await FreshAsync(component, options) is not { } fresh)
+                return;
+
+            if (HasStatus(fresh))
+            {
+                await component.FollowupAsync("This weekly is already being posted, or was posted or rejected.",
+                    ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
+
+            var (target, problem) = await WeeklyChecks.ResolveAsync(client, config, guildId, ct);
+            if (target is null || target.Screenshots is null)
+            {
+                await component.FollowupAsync(problem ?? "No screenshot channel is set up any more.", ephemeral: true,
+                    allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
+
+            var issue = WeeklyMessage.ReadIssue(fresh) ?? throw new InvalidOperationException("The preview has no issue footer.");
+            var pick = await WeeklyScreenshot.ChooseAsync(target.Screenshots, value, options, ct);
+
+            var manual = WeeklyMessage.WithoutScreenshot(WeeklyMessage.Manual(fresh));
+            if (pick is not null)
+                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
+
+            var (embeds, files) = await BuildAsync(manual, pick?.File, issue, DateTimeOffset.UtcNow, ct);
+            // Building took a few seconds: an Approve meanwhile wins, and its claim must not be overwritten.
+            if (await FreshAsync(component, options) is not { } stillWaiting || HasStatus(stillWaiting))
+                return;
+
+            var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
+            try
+            {
+                await component.ModifyOriginalResponseAsync(p =>
+                {
+                    p.Embeds = embeds;
+                    p.Attachments = attachments;
+                    p.Components = WeeklyMessage.Rechoose(fresh, value);
+                    p.AllowedMentions = AllowedMentions.None;
+                }, options);
+            }
+            finally
+            {
+                foreach (var a in attachments)
+                    a.Dispose();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Disconnecting.
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Changing the weekly's screenshot failed.");
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await component.FollowupAsync(ex switch
+                    {
+                        CalendarSourceException source => source.Message,
+                        InvalidOperationException { Message: var m } => m + " Pick another one.",
+                        _ when IsForbiddenException(ex) => "The bot is missing a permission in the weekly's channels.",
+                        _ => "The screenshot could not be changed; see /xllog of the plugin that tried.",
+                    }, ephemeral: true, allowedMentions: AllowedMentions.None, options: new RequestOptions { CancelToken = cts.Token });
             }
             catch
             {
