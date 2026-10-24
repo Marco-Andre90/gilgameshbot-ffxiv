@@ -111,6 +111,11 @@ public sealed class SetupPayload
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WeeklyApproval { get; set; }
 
+    /// <summary>The weekly's screenshot channel. Optional, with <see cref="WeeklyChannel"/>: absent means no Screenshot of the Week.</summary>
+    [JsonPropertyName("weeklyScreenshots")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyScreenshots { get; set; }
+
     /// <summary>
     /// The FC leader's Discord user ID. Optional: absent on codes from older plugins and when none
     /// is set, and then an import keeps the local one.
@@ -126,10 +131,10 @@ public sealed class SetupPayload
     [JsonIgnore] public ulong FcLeaderId { get; set; }
 }
 
-/// <summary>The weekly's channels as they are applied; both zero when there is no weekly.</summary>
-public sealed record WeeklyIds(ulong Channel, ulong Approval)
+/// <summary>The weekly's channels as they are applied; all zero when there is no weekly. <paramref name="Screenshots"/> is optional (0).</summary>
+public sealed record WeeklyIds(ulong Channel, ulong Approval, ulong Screenshots)
 {
-    public static readonly WeeklyIds None = new(0, 0);
+    public static readonly WeeklyIds None = new(0, 0, 0);
 }
 
 /// <summary>
@@ -180,6 +185,7 @@ public static class SetupCode
             ApolloChannels = FormatCalendar(config).Apollo,
             WeeklyChannel = FormatWeekly(config).Channel,
             WeeklyApproval = FormatWeekly(config).Approval,
+            WeeklyScreenshots = FormatWeekly(config).Screenshots,
             FcLeader = FormatLeader(config),
         };
 
@@ -305,7 +311,7 @@ public static class SetupCode
         // The same for the weekly.
         if (parsed.WeeklyChannel is not null)
         {
-            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.Branches!);
+            parsed.Weekly = ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyScreenshots, parsed.Branches!);
         }
 
         parsed.FcLeaderId = ParseLeader(parsed.FcLeader);
@@ -485,10 +491,11 @@ public static class SetupCode
     }
 
     /// <summary>The weekly settings as they travel in a setup code or the shared configuration; nulls when there is no weekly.</summary>
-    internal static (string? Channel, string? Approval) FormatWeekly(Configuration config) =>
+    internal static (string? Channel, string? Approval, string? Screenshots) FormatWeekly(Configuration config) =>
         config.IsWeeklyConfigured
-            ? (config.WeeklyChannelId.ToString(), config.WeeklyApprovalChannelId.ToString())
-            : (null, null);
+            ? (config.WeeklyChannelId.ToString(), config.WeeklyApprovalChannelId.ToString(),
+               config.WeeklyScreenshotChannelId != 0 ? config.WeeklyScreenshotChannelId.ToString() : null)
+            : (null, null, null);
 
     /// <summary>The FC leader as it travels in a setup code or the shared configuration; null when none is set.</summary>
     internal static string? FormatLeader(Configuration config) =>
@@ -501,9 +508,10 @@ public static class SetupCode
     /// <summary>
     /// The weekly settings from a setup code or the shared configuration; <see cref="WeeklyIds.None"/>
     /// when they are missing or malformed, or when a channel is any branch's relay, state or roster
-    /// channel (see <see cref="Configuration.WeeklyChannelProblem"/>).
+    /// channel (see <see cref="Configuration.WeeklyChannelProblem"/>). The screenshot channel is
+    /// only read, so it has no such rule; a malformed one is dropped alone.
     /// </summary>
-    internal static WeeklyIds ParseWeekly(string? channel, string? approval, List<SetupBranch> branches)
+    internal static WeeklyIds ParseWeekly(string? channel, string? approval, string? screenshots, List<SetupBranch> branches)
     {
         if (!ulong.TryParse(channel, out var channelId) || channelId == 0
             || !ulong.TryParse(approval, out var approvalId) || approvalId == 0)
@@ -515,7 +523,7 @@ public static class SetupCode
                 return WeeklyIds.None;
         }
 
-        return new WeeklyIds(channelId, approvalId);
+        return new WeeklyIds(channelId, approvalId, ulong.TryParse(screenshots, out var screenshotsId) ? screenshotsId : 0);
     }
 
     /// <summary>Writes parsed weekly settings into the config. Does not save.</summary>
@@ -523,6 +531,7 @@ public static class SetupCode
     {
         config.WeeklyChannelId = weekly.Channel;
         config.WeeklyApprovalChannelId = weekly.Approval;
+        config.WeeklyScreenshotChannelId = weekly.Screenshots;
     }
 
     private static string ToBase64Url(byte[] bytes) =>

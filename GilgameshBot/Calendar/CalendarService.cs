@@ -71,8 +71,12 @@ public sealed class CalendarService
     /// This session's server. Kept as an id, not a guild object: a Ready after a failed resume
     /// rebuilds the client's cache, and an old guild object would go stale.
     /// </param>
-    public CalendarService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId)
+    private readonly Func<bool> isNewest;
+
+    /// <param name="isNewest">True while this plugin is the newest online: only then does the hourly loop write.</param>
+    public CalendarService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, Func<bool> isNewest)
     {
+        this.isNewest = isNewest;
         this.config = config;
         this.log = log;
         this.client = client;
@@ -104,7 +108,8 @@ public sealed class CalendarService
 
             while (!ct.IsCancellationRequested)
             {
-                if (Current() is { } setup)
+                // Only the newest plugin online: an older one would redraw it without what it does not know.
+                if (isNewest() && Current() is { } setup)
                 {
                     var outcome = await UpdateAsync(setup, force: false, change: null, ct);
                     if (!outcome.Ok && outcome.Message != NotHere)

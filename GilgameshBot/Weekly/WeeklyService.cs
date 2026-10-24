@@ -48,14 +48,18 @@ public sealed class WeeklyService
     private readonly DiscordSocketClient client;
     private readonly ulong guildId;
     private readonly CalendarService calendar;
+    private readonly Func<bool> isNewest;
     private readonly SemaphoreSlim writeGate = new(1, 1);
 
     /// <summary>Previews and approvals under way, so a disconnect lets them finish their last edit first.</summary>
     private readonly ConcurrentDictionary<Task, byte> jobs = new();
 
     /// <param name="guildId">This session's server, kept as an id (see <see cref="CalendarService"/>).</param>
-    public WeeklyService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, CalendarService calendar)
+    /// <param name="isNewest">True while this plugin is the newest online: only then does the hourly refresh write.</param>
+    public WeeklyService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, CalendarService calendar,
+        Func<bool> isNewest)
     {
+        this.isNewest = isNewest;
         this.config = config;
         this.log = log;
         this.client = client;
@@ -191,6 +195,20 @@ public sealed class WeeklyService
                 return;
             }
 
+            // Picked here, or from the preview's menu: approving posts the picture the preview carries.
+            var manual = WeeklyMessage.Manual(sections);
+            WeeklyScreenshotFile? screenshot = null;
+            List<WeeklyScreenshotCandidate> candidates = [];
+            if (target.Screenshots is { } screenshots)
+            {
+                candidates = await WeeklyScreenshot.CandidatesAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), log, options);
+                if (await WeeklyScreenshot.PickAsync(candidates, log, ct) is { } pick)
+                {
+                    manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
+                    screenshot = pick.File;
+                }
+            }
+
             await writeGate.WaitAsync(ct);
             ulong previewId;
             string? warning;
@@ -201,7 +219,7 @@ public sealed class WeeklyService
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
                 warning = WeeklyMessage.EarlyWarning(last, lastIssue, now, discord: true);
 
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(sections), issue, now, ct);
+                var (embeds, files) = await BuildAsync(manual, screenshot, issue, now, ct);
                 // Exactly the FC leader, and nobody at all for a draft.
                 var allowed = draft ? AllowedMentions.None : new AllowedMentions { UserIds = [target.Leader.Id] };
 
@@ -217,7 +235,7 @@ public sealed class WeeklyService
                     previewId = await hook.SendFilesAsync(attachments,
                         WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Leader, warning),
                         embeds: embeds, username: WeeklyMessage.Name, avatarUrl: webhook.GetAvatarUrl(), options: options,
-                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id),
+                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id, candidates),
                         threadId: target.ApprovalThreadId);
                 }
                 finally
@@ -320,6 +338,20 @@ public sealed class WeeklyService
             var leaderId = config.FcLeaderId;
             var isApprover = leaderId != 0 && component.User.Id == leaderId;
 
+            if (id == WeeklyMessage.ScreenshotMenuId)
+            {
+                if (component.User.Id != WeeklyMessage.AuthorOf(component.Message) && !isApprover)
+                {
+                    await component.RespondAsync("Only its author or the FC leader can change the screenshot.",
+                        ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                    return;
+                }
+
+                await component.DeferAsync(options: options);
+                Track(() => ChangeScreenshotAsync(component, ct));
+                return;
+            }
+
             if (id is WeeklyMessage.ApproveId or WeeklyMessage.RejectId)
             {
                 if (!isApprover)
@@ -398,6 +430,90 @@ public sealed class WeeklyService
     }
 
     /// <summary>
+    /// The preview's screenshot menu: rebuilds the preview with the chosen picture, or none, while
+    /// it is still waiting for approval. The menu keeps the other choices, so it can be changed again.
+    /// </summary>
+    private async Task ChangeScreenshotAsync(SocketMessageComponent component, CancellationToken ct)
+    {
+        var options = new RequestOptions { CancelToken = ct };
+        var value = component.Data.Values?.FirstOrDefault() ?? WeeklyScreenshot.NoneValue;
+        try
+        {
+            // Too late once it is being posted, posted or rejected.
+            if (await FreshAsync(component, options) is not { } fresh)
+                return;
+
+            if (HasStatus(fresh))
+            {
+                await component.FollowupAsync("This weekly is already being posted, or was posted or rejected.",
+                    ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
+
+            var (target, problem) = await WeeklyChecks.ResolveAsync(client, config, guildId, ct);
+            if (target is null || target.Screenshots is null)
+            {
+                await component.FollowupAsync(problem ?? "No screenshot channel is set up any more.", ephemeral: true,
+                    allowedMentions: AllowedMentions.None, options: options);
+                return;
+            }
+
+            var issue = WeeklyMessage.ReadIssue(fresh) ?? throw new InvalidOperationException("The preview has no issue footer.");
+            var pick = await WeeklyScreenshot.ChooseAsync(target.Screenshots, value, options, ct);
+
+            var manual = WeeklyMessage.WithoutScreenshot(WeeklyMessage.Manual(fresh));
+            if (pick is not null)
+                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
+
+            var (embeds, files) = await BuildAsync(manual, pick?.File, issue, DateTimeOffset.UtcNow, ct);
+            // Building took a few seconds: an Approve meanwhile wins, and its claim must not be overwritten.
+            if (await FreshAsync(component, options) is not { } stillWaiting || HasStatus(stillWaiting))
+                return;
+
+            var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
+            try
+            {
+                // Embeds and files only: the buttons may carry an Approve's claim by now, and a
+                // claim must never be overwritten.
+                await component.ModifyOriginalResponseAsync(p =>
+                {
+                    p.Embeds = embeds;
+                    p.Attachments = attachments;
+                    p.AllowedMentions = AllowedMentions.None;
+                }, options);
+            }
+            finally
+            {
+                foreach (var a in attachments)
+                    a.Dispose();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Disconnecting.
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Changing the weekly's screenshot failed.");
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await component.FollowupAsync(ex switch
+                    {
+                        CalendarSourceException source => source.Message,
+                        InvalidOperationException { Message: var m } => m + " Pick another one.",
+                        _ when IsForbiddenException(ex) => "The bot is missing a permission in the weekly's channels.",
+                        _ => "The screenshot could not be changed; see /xllog of the plugin that tried.",
+                    }, ephemeral: true, allowedMentions: AllowedMentions.None, options: new RequestOptions { CancelToken = cts.Token });
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    /// <summary>
     /// Approve. Every plugin receives every click, and two approvers may click at once, so a post
     /// is claimed on the preview first: the claimer's custom id goes on a disabled "Posting…"
     /// button, and after a pause only the plugin whose claim is still there goes on (the last
@@ -459,7 +575,9 @@ public sealed class WeeklyService
                 var now = DateTimeOffset.UtcNow;
                 var (_, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), issue, now, ct);
+                // From the preview as it is now, claimed: its screenshot may have been changed since the click.
+                var screenshot = await WeeklyScreenshot.ReadBackAsync(settled, ct);
+                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(settled), screenshot, issue, now, ct);
 
                 var webhook = await WebhookAsync(target.WebhookHome, create: true, options)
                               ?? throw new InvalidOperationException("The webhook could not be created.");
@@ -509,6 +627,13 @@ public sealed class WeeklyService
                 if (claimedAt.Elapsed > ClaimDeadline)
                 {
                     await RestoreAsync(component, head, "it took too long to build", options);
+                    return;
+                }
+
+                // A screenshot change that was under way when the claim landed: post what is shown, not what was.
+                if (WeeklyMessage.ScreenshotFileId(stillOurs) != WeeklyMessage.ScreenshotFileId(settled))
+                {
+                    await RestoreAsync(component, head, "the screenshot was changed while it was being posted", options);
                     return;
                 }
 
@@ -706,7 +831,8 @@ public sealed class WeeklyService
 
             while (!ct.IsCancellationRequested)
             {
-                if (config.IsWeeklyConfigured)
+                // Only the newest plugin online: an older one would rebuild the weekly without what it does not know.
+                if (config.IsWeeklyConfigured && isNewest())
                     await RefreshAsync(ct);
 
                 var now = DateTimeOffset.UtcNow;
@@ -753,7 +879,9 @@ public sealed class WeeklyService
                 if (WeeklyMessage.EventsText(events, last.Timestamp, guildId) == WeeklyMessage.CurrentEventsText(last))
                     return;
 
-                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), issue, events, last.Timestamp, guildId);
+                // Every file is attached again, so the screenshot too.
+                var screenshot = await WeeklyScreenshot.ReadBackAsync(last, ct);
+                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), screenshot, issue, events, last.Timestamp, guildId);
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
@@ -797,10 +925,10 @@ public sealed class WeeklyService
 
     /// <summary>The message for <paramref name="issue"/>, with the events of the week from <paramref name="from"/>.</summary>
     private async Task<(Embed[] Embeds, List<(string Name, byte[] Bytes)> Files)> BuildAsync(
-        List<EmbedBuilder> manual, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
+        List<EmbedBuilder> manual, WeeklyScreenshotFile? screenshot, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
     {
         var events = await EventsAsync(ct);
-        return WeeklyMessage.Assemble(manual, issue, events, from, guildId);
+        return WeeklyMessage.Assemble(manual, screenshot, issue, events, from, guildId);
     }
 
     /// <summary>The calendar's Apollo events; none when no Apollo channel is set. Throws <see cref="CalendarSourceException"/> on an unreadable one.</summary>

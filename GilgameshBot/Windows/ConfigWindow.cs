@@ -92,6 +92,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private bool weeklyBuffersLoaded;
     private string weeklyChannelIdBuffer = string.Empty;
     private string weeklyApprovalIdBuffer = string.Empty;
+    private string weeklyScreenshotIdBuffer = string.Empty;
     private string? weeklyMessage;
     private bool weeklyMessageIsWarning;
     private string? weeklySaveMessage;
@@ -1458,6 +1459,7 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             weeklyChannelIdBuffer = config.WeeklyChannelId == 0 ? string.Empty : config.WeeklyChannelId.ToString();
             weeklyApprovalIdBuffer = config.WeeklyApprovalChannelId == 0 ? string.Empty : config.WeeklyApprovalChannelId.ToString();
+            weeklyScreenshotIdBuffer = config.WeeklyScreenshotChannelId == 0 ? string.Empty : config.WeeklyScreenshotChannelId.ToString();
             weeklyBuffersLoaded = true;
         }
 
@@ -1472,6 +1474,13 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiComponents.HelpMarker(
             "Where previews wait for approval, and where Start weekly posts its button. Best kept for officers; it may be the announcement channel. Previews go out through a webhook "
             + "there too, so the bot needs View Channel, Manage Webhooks, Send Messages, Embed Links, Attach Files and Read Message History.");
+
+        ImGui.InputText("Screenshot channel ID (optional)", ref weeklyScreenshotIdBuffer, 32);
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker(
+            "Members' screenshots. When a weekly is written, the picture with the most reactions posted there over the last "
+            + "7 days goes in it as the Screenshot of the Week. Only read: the bot needs View Channel and Read Message History. "
+            + "Leave it empty for no such section.");
 
         TextColoured(Grey, config.FcLeaderId != 0
             ? "Previews are approved by the FC leader set on the Advanced tab."
@@ -1554,6 +1563,13 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
         }
 
+        ulong screenshots = 0;
+        if (weeklyScreenshotIdBuffer.Trim().Length > 0 && (!ulong.TryParse(weeklyScreenshotIdBuffer.Trim(), out screenshots) || screenshots == 0))
+        {
+            weeklySaveMessage = "Screenshot channel ID must be a number.";
+            return;
+        }
+
         var configured = filled == 2;
         if (configured && config.WeeklyChannelProblem(ids[0], ids[1]) is { } problem)
         {
@@ -1563,6 +1579,7 @@ public sealed class ConfigWindow : Window, IDisposable
 
         config.WeeklyChannelId = ids[0];
         config.WeeklyApprovalChannelId = ids[1];
+        config.WeeklyScreenshotChannelId = configured ? screenshots : 0;
         config.Save();
         weeklyBuffersLoaded = false;
 

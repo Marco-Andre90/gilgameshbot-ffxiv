@@ -30,10 +30,10 @@ public sealed record WeeklyIssue(int Number, DateOnly First)
 /// </summary>
 /// <remarks>
 /// <para>
-/// The message is the header picture, as a plain attachment above everything, and up to five
-/// embeds: this week's events, game news, FC news, notes from the officers and "The Fat Cat
-/// says:". Empty ones are left out: a week without events, a section left blank. The footer
-/// goes on the last embed there is.
+/// The message is the header picture, as a plain attachment above everything, and up to six
+/// embeds: this week's events, game news, FC news, notes from the officers, the Screenshot of
+/// the Week and "The Fat Cat says:". Empty ones are left out: a week without events, a section
+/// left blank, no screenshot with a reaction. The footer goes on the last embed there is.
 /// </para>
 /// <para>
 /// No state is kept anywhere else: the preview message carries the officers' sections, and the
@@ -52,6 +52,7 @@ public static partial class WeeklyMessage
     public const string ApproveId = Prefix + "approve";
     public const string RejectId = Prefix + "reject";
     public const string DeleteId = Prefix + "delete:";
+    public const string ScreenshotMenuId = Prefix + "shot";
     private const string ClaimPrefix = Prefix + "claim:";
 
     private const string GameField = "game";
@@ -61,7 +62,8 @@ public static partial class WeeklyMessage
 
     // The form's limits keep the whole message under Discord's 6000 characters across its embeds:
     // these add up to 3700, the events take at most MaxEvents (+ one "…and N more" line), the
-    // width padding about 260 and the titles and footer about 150 more: about 5600 at worst.
+    // width padding about 320, the screenshot's line about 60 and the titles and footer about 175
+    // more: about 5700 at worst.
     private const int MaxGame = 1000;
     private const int MaxFc = 1000;
     private const int MaxNotes = 1200;
@@ -73,6 +75,7 @@ public static partial class WeeklyMessage
     private const string FcTitle = "FC news";
     private const string NotesTitle = "Notes from the officers";
     private const string SaysTitle = "The Fat Cat says:";
+    private const string ScreenshotTitle = "Screenshot of the Week";
     private const string FooterPrefix = Name + " · Issue No. ";
 
     private static readonly Color HeaderColor = new(0xD9, 0x89, 0x3A);
@@ -80,8 +83,9 @@ public static partial class WeeklyMessage
     private static readonly Color GameColor = new(0x4F, 0x8E, 0xF7);
     private static readonly Color FcColor = new(0x9B, 0x7B, 0xEA);
     private static readonly Color NotesColor = new(0xED, 0x42, 0x45);
+    private static readonly Color ScreenshotColor = new(0x3B, 0xA5, 0x5D);
 
-    private static readonly string[] ManualTitles = [GameTitle, FcTitle, NotesTitle, SaysTitle];
+    private static readonly string[] ManualTitles = [GameTitle, FcTitle, NotesTitle, ScreenshotTitle, SaysTitle];
 
     // --- The form -------------------------------------------------------------------------------
 
@@ -163,8 +167,40 @@ public static partial class WeeklyMessage
     }
 
     /// <summary>
+    /// The Screenshot of the Week's embed, linking to the post it came from and crediting its
+    /// author (a mention inside an embed never notifies). Its picture is put in by <see cref="Assemble"/>.
+    /// </summary>
+    public static EmbedBuilder Screenshot(WeeklyScreenshotCandidate shot, ulong guildId) =>
+        new EmbedBuilder()
+            .WithTitle(ScreenshotTitle)
+            .WithUrl($"https://discord.com/channels/{guildId}/{shot.Post.Channel.Id}/{shot.Post.Id}")
+            .WithDescription($"📸 by <@{shot.Post.Author.Id}> · {Reactions(shot.Reactions)}")
+            .WithColor(ScreenshotColor);
+
+    private static string Reactions(int count) => count == 1 ? "1 reaction" : $"{count} reactions";
+
+    /// <summary><paramref name="manual"/> without the Screenshot of the Week.</summary>
+    public static List<EmbedBuilder> WithoutScreenshot(List<EmbedBuilder> manual)
+    {
+        manual.RemoveAll(b => b.Title == ScreenshotTitle);
+        return manual;
+    }
+
+    /// <summary><paramref name="manual"/> with <paramref name="screenshot"/> in its place: last, but before "The Fat Cat says:".</summary>
+    public static List<EmbedBuilder> WithScreenshot(List<EmbedBuilder> manual, EmbedBuilder screenshot)
+    {
+        var says = manual.FindIndex(b => b.Title == SaysTitle);
+        manual.Insert(says < 0 ? manual.Count : says, screenshot);
+        return manual;
+    }
+
+    /// <summary>True when a preview or a posted weekly has a Screenshot of the Week.</summary>
+    public static bool HasScreenshot(IMessage message) => message.Embeds.Any(e => e.Title == ScreenshotTitle);
+
+    /// <summary>
     /// The officers' embeds of a preview or a posted weekly, as they were written: everything but
-    /// the header and the events. The pictures are put back by <see cref="Assemble"/>.
+    /// the header and the events, the Screenshot of the Week included. The pictures are put back
+    /// by <see cref="Assemble"/>.
     /// </summary>
     public static List<EmbedBuilder> Manual(IMessage message)
     {
@@ -177,6 +213,8 @@ public static partial class WeeklyMessage
                     b.WithDescription(text);
                 if (e.Color is { } c)
                     b.WithColor(c);
+                if (e.Url is { } url)
+                    b.WithUrl(url);
                 return b;
             })
             .ToList();
@@ -191,10 +229,12 @@ public static partial class WeeklyMessage
     /// embed would shrink it. Every embed ends with a line of invisible characters (see
     /// <see cref="Pad"/>), so they all stretch to Discord's widest embed instead of fitting their
     /// text. Events are those starting in [<paramref name="from"/>, <paramref name="from"/> + 7
-    /// days), and those under way at <paramref name="from"/>.
+    /// days), and those under way at <paramref name="from"/>. <paramref name="screenshot"/> is the
+    /// Screenshot of the Week's picture, required when <paramref name="manual"/> has its embed.
     /// </summary>
     public static (Embed[] Embeds, List<(string Name, byte[] Bytes)> Files) Assemble(
-        List<EmbedBuilder> manual, WeeklyIssue issue, IReadOnlyList<CalendarEvent> events, DateTimeOffset from, ulong guildId)
+        List<EmbedBuilder> manual, WeeklyScreenshotFile? screenshot, WeeklyIssue issue, IReadOnlyList<CalendarEvent> events,
+        DateTimeOffset from, ulong guildId)
     {
         var builders = new List<EmbedBuilder>();
         if (EventsText(events, from, guildId) is { } eventsText)
@@ -213,6 +253,8 @@ public static partial class WeeklyMessage
                 b.WithThumbnailUrl("attachment://" + WeeklyAssets.EventThumbnail);
             else if (b.Title == SaysTitle)
                 b.WithThumbnailUrl("attachment://" + WeeklyAssets.Sticker);
+            else if (b.Title == ScreenshotTitle)
+                b.WithImageUrl("attachment://" + (screenshot ?? throw new InvalidOperationException("The Screenshot of the Week has no picture.")).Name);
         }
 
         builders[^1].WithFooter(Footer(issue));
@@ -226,6 +268,8 @@ public static partial class WeeklyMessage
             files.Add((WeeklyAssets.EventThumbnail, WeeklyAssets.Get(WeeklyAssets.EventThumbnail)));
         if (builders.Any(b => b.Title == SaysTitle))
             files.Add((WeeklyAssets.Sticker, WeeklyAssets.Get(WeeklyAssets.Sticker)));
+        if (screenshot is not null && builders.Any(b => b.Title == ScreenshotTitle))
+            files.Add((screenshot.Name, screenshot.Bytes));
 
         return (embeds, files);
     }
@@ -352,21 +396,57 @@ public static partial class WeeklyMessage
         return warning is null ? text : $"{text}\n⚠️ {warning}";
     }
 
-    /// <summary>Approve / Reject on a preview; Delete draft on a draft.</summary>
-    public static MessageComponent PreviewButtons(bool draft, ulong authorId) =>
-        draft
-            ? DeleteButton(authorId, draft: true)
+    /// <summary>
+    /// Approve / Reject on a preview; Delete draft on a draft. With <paramref name="screenshots"/>,
+    /// a menu under them to pick another Screenshot of the Week (or none). It shows no choice: the
+    /// preview does, and a pick edits only the preview's embeds and files, never its buttons.
+    /// </summary>
+    public static MessageComponent PreviewButtons(bool draft, ulong authorId, IReadOnlyList<WeeklyScreenshotCandidate>? screenshots = null)
+    {
+        var builder = draft
+            ? new ComponentBuilder().WithButton(DeleteLabel(true), DeleteId + authorId, ButtonStyle.Secondary)
             : new ComponentBuilder()
                 .WithButton("Approve", ApproveId, ButtonStyle.Success)
-                .WithButton("Reject", RejectId, ButtonStyle.Danger)
-                .Build();
+                .WithButton("Reject", RejectId, ButtonStyle.Danger);
+
+        if (screenshots is { Count: > 0 })
+        {
+            var menu = new SelectMenuBuilder()
+                .WithCustomId(ScreenshotMenuId)
+                .WithPlaceholder("Screenshot of the Week…");
+
+            // A menu holds 25 options: the best 24 pictures and "none".
+            foreach (var c in screenshots.Take(24))
+            {
+                var name = (c.Post.Author as IGuildUser)?.DisplayName ?? c.Post.Author.GlobalName ?? c.Post.Author.Username;
+                var label = $"{name} · {Reactions(c.Reactions)}";
+                var description = (c.Pictures > 1 ? $"Image {c.Index + 1} of {c.Pictures} · " : "")
+                                  + "posted " + c.Post.Timestamp.UtcDateTime.ToString("MMM d", CultureInfo.InvariantCulture);
+                menu.AddOption(Cap(label), c.Value, Cap(description));
+            }
+
+            menu.AddOption("No screenshot", WeeklyScreenshot.NoneValue, "Leave the section out");
+            builder.WithSelectMenu(menu, row: 1);
+        }
+
+        return builder.Build();
+    }
+
+    /// <summary>Menu labels and descriptions hold 100 characters.</summary>
+    private static string Cap(string text) => text.Length <= 100 ? text : text[..99] + "…";
+
+    /// <summary>The id of the Screenshot of the Week's attached picture; 0 without one. Changes with every pick.</summary>
+    public static ulong ScreenshotFileId(IMessage message) =>
+        message.Attachments.FirstOrDefault(a => a.Filename.StartsWith(WeeklyScreenshot.FilePrefix, StringComparison.Ordinal))?.Id ?? 0;
 
     /// <summary>
     /// Delete draft, or Delete preview on a preview that was posted or rejected, so the approval
     /// channel can be kept clean. For the author (carried in the id) or the FC leader.
     /// </summary>
     public static MessageComponent DeleteButton(ulong authorId, bool draft) =>
-        new ComponentBuilder().WithButton(draft ? "Delete draft" : "Delete preview", DeleteId + authorId, ButtonStyle.Secondary).Build();
+        new ComponentBuilder().WithButton(DeleteLabel(draft), DeleteId + authorId, ButtonStyle.Secondary).Build();
+
+    private static string DeleteLabel(bool draft) => draft ? "Delete draft" : "Delete preview";
 
     [GeneratedRegex(@"\bby <@!?(\d{1,20})>")]
     private static partial Regex AuthorRegex();
