@@ -45,7 +45,9 @@ namespace GilgameshBot.Relay;
 /// every alive message in the channel, all branches, the highest build is the
 /// <see cref="IsNewest"/> one: it answers the calendar's and the weekly's clicks straight away
 /// and does their hourly writes; the others answer only as backup, a moment later. A dev plugin
-/// outranks any release (it is stamped 0.1.0); messages without a build rank lowest.
+/// outranks any release (it is stamped 0.1.0); messages without a build rank lowest. The build is
+/// followed by what the plugin has set up (<c>c</c> calendar, <c>w</c> weekly): a plugin only
+/// yields a feature to a newer one that has it, so a newer plugin without it never blocks it.
 /// </para>
 /// <para>Thread model: <see cref="RunAsync"/> owns all mutation; the public state is read from the
 /// game thread (UI, Enqueue) and is published through volatile / interlocked fields.</para>
@@ -66,7 +68,7 @@ public sealed partial class PresenceCoordinator
     /// <summary>Follows the beat number: <c> · v0.18.0</c> or <c> · dev</c>.</summary>
     private const string BuildSeparator = " · ";
 
-    [GeneratedRegex(@" · beat \d+ · (dev|v\d+(?:\.\d+){1,3})$")]
+    [GeneratedRegex(@" · beat \d+ · (dev|v\d+(?:\.\d+){1,3})( [cw]+)?$")]
     private static partial Regex BuildRegex();
 
     /// <summary>This plugin's build: "dev", or "v" + its version.</summary>
@@ -100,8 +102,8 @@ public sealed partial class PresenceCoordinator
     private ulong? lastLeaderId;
 
     private volatile bool isLeader;
-    private volatile bool isNewest = true;
-    private volatile string? newestBuild;
+    private volatile bool newestCalendar = true;
+    private volatile bool newestWeekly = true;
     private volatile string? leaderLabel;
     private int queuePosition;
     private int alivePeers;
@@ -148,13 +150,8 @@ public sealed partial class PresenceCoordinator
     /// as newest). True until the channel was read, and whenever it cannot be: the plugin then
     /// behaves as if it were alone, as plugins did before builds were compared.
     /// </summary>
-    public bool IsNewest => isNewest;
-
-    /// <summary>This plugin's build: "dev", or "v" + its version.</summary>
-    public string Build => build;
-
-    /// <summary>The highest build alive in the state channel, when it is not this plugin's; else null.</summary>
-    public string? NewerBuild => newestBuild;
+    /// <param name="weekly">The weekly's turn; false for the calendar's.</param>
+    public bool IsNewestFor(bool weekly) => weekly ? newestWeekly : newestCalendar;
 
     /// <summary>Character label of the current leader, if known.</summary>
     public string? LeaderLabel => leaderLabel;
@@ -197,6 +194,8 @@ public sealed partial class PresenceCoordinator
         }
         catch (Exception ex)
         {
+            // No longer knowing who is newer: behave as if alone, as before builds were compared.
+            newestCalendar = newestWeekly = true;
             log.Error(ex, "Presence coordinator stopped; this instance will not relay.");
             SetLeadership(false);
         }
@@ -435,31 +434,41 @@ public sealed partial class PresenceCoordinator
         lastLeaderId = leader?.Id;
 
         // Every branch's plugins: the calendar and the weekly belong to the server, not the branch.
-        var newest = allPresence
-            .Where(m => serverNow - LastTouched(m) < stale)
+        var peers = allPresence
+            .Where(m => serverNow - LastTouched(m) < stale && m.Id != ownId)
             .Select(m => ReadBuild(m.Content))
-            .Append(build)
-            .MaxBy(Rank)!;
-        SetNewest(Rank(newest).CompareTo(Rank(build)) <= 0, newest);
+            .ToList();
+        newestCalendar = IsNewestAmong(peers, 'c');
+        newestWeekly = IsNewestAmong(peers, 'w');
     }
 
-    private void SetNewest(bool value, string newest)
+    /// <summary>True unless a peer that has <paramref name="feature"/> set up runs a higher build.</summary>
+    private bool IsNewestAmong(List<(string Build, string Features)> peers, char feature)
     {
-        newestBuild = value ? null : newest;
-        if (isNewest == value)
-            return;
+        var newer = peers.Where(p => p.Features.Contains(feature) && Rank(p.Build).CompareTo(Rank(build)) > 0).Select(p => p.Build).FirstOrDefault();
+        var value = newer is null;
+        if (value != (feature == 'c' ? newestCalendar : newestWeekly))
+        {
+            var what = feature == 'c' ? "calendar" : "weekly";
+            if (value)
+                log.Information("This plugin ({Build}) now answers the {What} first.", build, what);
+            else
+                log.Information("A newer plugin ({Newer}) is online: this one ({Build}) answers the {What} only as backup.", newer!, build, what);
+        }
 
-        isNewest = value;
-        if (value)
-            log.Information("This plugin ({Build}) is now the newest online: it answers the calendar's and the weekly's buttons first.", build);
-        else
-            log.Information("A newer plugin ({Newest}) is online: this one ({Build}) answers the calendar's and the weekly's buttons only as backup.",
-                newest, build);
+        return value;
     }
 
-    /// <summary>The build at the end of a presence message; "" for plugins that predate it.</summary>
-    private static string ReadBuild(string content) =>
-        BuildRegex().Match(content) is { Success: true } m ? m.Groups[1].Value : string.Empty;
+    /// <summary>The build and features at the end of a presence message; empty for plugins that predate them.</summary>
+    private static (string Build, string Features) ReadBuild(string content) =>
+        BuildRegex().Match(content) is { Success: true } m ? (m.Groups[1].Value, m.Groups[2].Value) : (string.Empty, string.Empty);
+
+    /// <summary>What this plugin has set up, after its build: " cw", " c", " w" or nothing.</summary>
+    private string Features()
+    {
+        var f = (config.IsCalendarConfigured ? "c" : "") + (config.IsWeeklyConfigured ? "w" : "");
+        return f.Length == 0 ? "" : " " + f;
+    }
 
     /// <summary>Orders builds: none, then releases by version, then dev.</summary>
     private static (int, Version) Rank(string build) =>
@@ -604,7 +613,7 @@ public sealed partial class PresenceCoordinator
 
     private static DateTimeOffset LastTouched(IMessage message) => message.EditedTimestamp ?? message.Timestamp;
 
-    private string BuildContent() => $"{Prefix}{branchTag}{label}{BeatSeparator}{beat}{BuildSeparator}{build}";
+    private string BuildContent() => $"{Prefix}{branchTag}{label}{BeatSeparator}{beat}{BuildSeparator}{build}{Features()}";
 
     /// <summary>Reads the character label back out of a peer's presence message.</summary>
     private string ExtractLabel(string content)

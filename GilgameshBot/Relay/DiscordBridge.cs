@@ -327,11 +327,11 @@ public sealed class DiscordBridge : IDisposable
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
                 // The Free Company calendar, when it is on this server: refreshed hourly when due.
-                s.Calendar = new CalendarService(config, log, s.Client, guild.Id, () => coordinator.IsNewest);
+                s.Calendar = new CalendarService(config, log, s.Client, guild.Id, () => coordinator.IsNewestFor(weekly: false));
                 s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
 
                 // The Fat Cat Weekly, when it is on this server: its events refreshed hourly.
-                s.Weekly = new WeeklyService(config, log, s.Client, guild.Id, s.Calendar, () => coordinator.IsNewest);
+                s.Weekly = new WeeklyService(config, log, s.Client, guild.Id, s.Calendar, () => coordinator.IsNewestFor(weekly: true));
                 s.WeeklyLoop = Task.Run(() => s.Weekly.RunAsync(s.Cts.Token));
 
                 // The bot's own slash commands. Registration is a few REST round trips against
@@ -484,7 +484,9 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
             return Task.CompletedTask;
 
-        return AnswerAsync(s, () => slash.HandleAsync(command, s.Cts.Token));
+        // Only /weekly and /calendar are answered by any plugin; the rest only by the leader.
+        bool? weekly = command.Data.Name switch { "weekly" => true, "calendar" => false, _ => null };
+        return AnswerAsync(s, weekly, () => slash.HandleAsync(command, s.Cts.Token));
     }
 
     /// <summary>
@@ -492,9 +494,10 @@ public sealed class DiscordBridge : IDisposable
     /// <see cref="BackupDelay"/> (off the gateway task) on the others, which then find it
     /// acknowledged already (40060, swallowed by every handler) unless the newest one is gone.
     /// </summary>
-    private Task AnswerAsync(Session s, Func<Task> handler)
+    /// <remarks><paramref name="weekly"/> says whose turn it is: the weekly's, the calendar's, or (null) neither.</remarks>
+    private Task AnswerAsync(Session s, bool? weekly, Func<Task> handler)
     {
-        if (s.Coordinator is not { IsNewest: false })
+        if (weekly is not { } w || s.Coordinator is not { } coordinator || coordinator.IsNewestFor(w))
             return handler();
 
         var ct = s.Cts.Token;
@@ -523,7 +526,8 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
             return Task.CompletedTask;
 
-        return AnswerAsync(s, () => slash.HandleAutocompleteAsync(interaction, s.Cts.Token));
+        bool? weekly = interaction.Data.CommandName == "calendar" ? false : null;
+        return AnswerAsync(s, weekly, () => slash.HandleAutocompleteAsync(interaction, s.Cts.Token));
     }
 
     /// <summary>A button click or menu pick; only the calendar's and the weekly's are answered, by any connected plugin.</summary>
@@ -533,7 +537,8 @@ public sealed class DiscordBridge : IDisposable
             return Task.CompletedTask;
 
         // Each one ignores what is not its own, by custom id prefix.
-        return AnswerAsync(s, () => component.Data.CustomId.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal)
+        var isWeekly = component.Data.CustomId.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal);
+        return AnswerAsync(s, isWeekly, () => isWeekly
             ? weekly.HandleComponentAsync(component, s.Cts.Token)
             : calendar.HandleComponentAsync(component, s.Cts.Token));
     }
@@ -544,7 +549,7 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Weekly is not { } weekly)
             return Task.CompletedTask;
 
-        return AnswerAsync(s, () => weekly.HandleModalAsync(modal, s.Cts.Token));
+        return AnswerAsync(s, true, () => weekly.HandleModalAsync(modal, s.Cts.Token));
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)
