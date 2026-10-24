@@ -637,6 +637,10 @@ public sealed class WeeklyService
                     return;
                 }
 
+                // Without it Discord still shows the mention, but may not notify anyone.
+                if (CalendarChannels.Permissions(client, target.Announcement) is not { MentionEveryone: true })
+                    log.Warning("The bot lacks Mention Everyone in #{Channel}: the weekly's @everyone may not notify anyone.", target.Announcement.Name);
+
                 ulong postedId;
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
@@ -645,9 +649,10 @@ public sealed class WeeklyService
                     using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     using var hook = new DiscordWebhookClient(webhook);
                     await CalendarChannels.ReopenAsync(target.Announcement, new RequestOptions { CancelToken = sendCts.Token });
-                    postedId = await hook.SendFilesAsync(attachments, text: null, embeds: embeds, username: WeeklyMessage.Name,
+                    // @everyone and nothing else: the officers' text has its mass mentions neutralised.
+                    postedId = await hook.SendFilesAsync(attachments, text: WeeklyMessage.PostedText, embeds: embeds, username: WeeklyMessage.Name,
                         avatarUrl: webhook.GetAvatarUrl(), options: new RequestOptions { CancelToken = sendCts.Token },
-                        allowedMentions: AllowedMentions.None, threadId: target.ThreadId);
+                        allowedMentions: new AllowedMentions(AllowedMentionTypes.Everyone), threadId: target.ThreadId);
                 }
                 finally
                 {
@@ -958,8 +963,9 @@ public sealed class WeeklyService
         foreach (var m in messages.OrderByDescending(m => m.Id))
         {
             // Previews come from the same webhook but carry text (who wrote it, its status); a posted
-            // weekly has none.
-            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name && string.IsNullOrEmpty(m.Content)
+            // weekly has only its @everyone, or none (posted before it had one).
+            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name
+                && (string.IsNullOrEmpty(m.Content) || m.Content == WeeklyMessage.PostedText)
                 && WeeklyMessage.ReadIssue(m) is { } issue)
                 return (m, issue);
         }

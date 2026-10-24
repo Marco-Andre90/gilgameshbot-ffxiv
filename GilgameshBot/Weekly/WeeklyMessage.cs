@@ -46,6 +46,9 @@ public static partial class WeeklyMessage
 {
     public const string Name = "The Fat Cat Weekly";
 
+    /// <summary>A posted weekly's whole text: it notifies the server. Previews never carry exactly this.</summary>
+    public const string PostedText = "@everyone";
+
     // Custom ids. Everything a click needs travels in the id, so any plugin can answer it.
     public const string Prefix = "gbweekly:";
     public const string FillId = Prefix + "fill:";
