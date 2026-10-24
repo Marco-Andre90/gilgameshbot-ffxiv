@@ -202,7 +202,7 @@ public sealed class WeeklyService
             if (target.Screenshots is { } screenshotChannel)
             {
                 candidates = await WeeklyScreenshot.CandidatesAsync(screenshotChannel, DateTimeOffset.UtcNow.AddDays(-7), log, options);
-                if (await WeeklyScreenshot.PickAsync(candidates, target.Approval.Guild.MaxUploadLimit, log, ct) is { Count: > 0 } picks)
+                if (await WeeklyScreenshot.PickAsync(candidates, MaxUpload(target), log, ct) is { Count: > 0 } picks)
                 {
                     manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(picks.Select(p => p.Candidate).ToList(), guildId));
                     screenshots = picks.Select(p => p.File).ToList();
@@ -459,7 +459,7 @@ public sealed class WeeklyService
             }
 
             var issue = WeeklyMessage.ReadIssue(fresh) ?? throw new InvalidOperationException("The preview has no issue footer.");
-            var picks = await WeeklyScreenshot.ChooseAsync(target.Screenshots, values, target.Approval.Guild.MaxUploadLimit, options, ct);
+            var picks = await WeeklyScreenshot.ChooseAsync(target.Screenshots, values, MaxUpload(target), options, ct);
 
             var manual = WeeklyMessage.WithoutScreenshot(WeeklyMessage.Manual(fresh));
             if (picks.Count > 0)
@@ -922,6 +922,13 @@ public sealed class WeeklyService
     }
 
     // --- Shared helpers -----------------------------------------------------------------------
+
+    /// <summary>
+    /// What one message may upload on the weekly's server. From the gateway's guild: a channel
+    /// read over REST (an archived thread) cannot return its guild.
+    /// </summary>
+    private ulong MaxUpload(WeeklyTarget target) =>
+        client.GetGuild(target.Approval.GuildId)?.MaxUploadLimit ?? 10 * 1024 * 1024;
 
     /// <summary>The message for <paramref name="issue"/>, with the events of the week from <paramref name="from"/>.</summary>
     private async Task<(Embed[] Embeds, List<(string Name, byte[] Bytes)> Files)> BuildAsync(
