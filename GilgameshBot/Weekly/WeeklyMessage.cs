@@ -269,14 +269,29 @@ public static partial class WeeklyMessage
                     : throw new InvalidOperationException("The Screenshot of the Week has no picture.")));
         }
 
-        // Footer and padding on the sections only: Discord shows nothing of a gallery picture's embed but the picture.
-        builders[^1].WithFooter(Footer(issue));
-        foreach (var b in builders)
+        // The screenshot's embed is as wide as its pictures, whatever its text: padding would only wrap into blank lines.
+        foreach (var b in builders.Where(b => b.Title != ScreenshotTitle))
             b.WithDescription(Pad(b.Description, thumbnail: b.ThumbnailUrl is not null));
 
-        if (builders.FindIndex(b => b.Title == ScreenshotTitle) is var shot and >= 0)
-            builders.InsertRange(shot + 1, screenshots.Skip(1).Select(s =>
-                new EmbedBuilder().WithUrl(builders[shot].Url).WithImageUrl("attachment://" + s.Name)));
+        // The other pictures: side by side in Discord's gallery (embeds with the section's url and
+        // nothing else, folded into it), which crops wide shots, so those go one under another on
+        // embeds of their own instead.
+        var gallery = new HashSet<EmbedBuilder>();
+        if (builders.FindIndex(b => b.Title == ScreenshotTitle) is var shot and >= 0 && screenshots.Count > 1)
+        {
+            var inGallery = !screenshots.Any(IsWide);
+            var extras = screenshots.Skip(1)
+                .Select(s => inGallery
+                    ? new EmbedBuilder().WithUrl(builders[shot].Url).WithImageUrl("attachment://" + s.Name)
+                    : new EmbedBuilder().WithImageUrl("attachment://" + s.Name).WithColor(ScreenshotColor))
+                .ToList();
+            if (inGallery)
+                gallery.UnionWith(extras);
+            builders.InsertRange(shot + 1, extras);
+        }
+
+        // On the last embed Discord shows: a gallery picture's embed shows nothing but its picture.
+        builders.Last(b => !gallery.Contains(b)).WithFooter(Footer(issue));
 
         var embeds = builders.Select(b => b.Build()).ToArray();
 
@@ -289,6 +304,21 @@ public static partial class WeeklyMessage
             files.AddRange(screenshots.Select(s => (s.Name, s.Bytes)));
 
         return (embeds, files);
+    }
+
+    /// <summary>Wider than 6:5: cropped badly in a gallery's tiles. One that cannot be read counts as wide.</summary>
+    private static bool IsWide(WeeklyScreenshotFile file)
+    {
+        try
+        {
+            // Only the header is read: no render, so no need for the renderer's gate.
+            var info = SixLabors.ImageSharp.Image.Identify(file.Bytes);
+            return info.Width * 5 > info.Height * 6;
+        }
+        catch (Exception ex) when (ex is SixLabors.ImageSharp.ImageFormatException or SixLabors.ImageSharp.UnknownImageFormatException)
+        {
+            return true;
+        }
     }
 
     // --- Width -------------------------------------------------------------------------------
