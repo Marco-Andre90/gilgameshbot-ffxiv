@@ -56,7 +56,10 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         MigrateConfiguration(Configuration);
 
-        Bridge = new DiscordBridge(Configuration, Log, GetCharacterLabelOnFrameworkThread);
+        // Release builds are stamped with their version by the release workflow; a dev plugin is
+        // not (0.1.0), so it says so instead, and outranks every release (see PresenceCoordinator).
+        var build = PluginInterface.IsDev ? "dev" : "v" + typeof(Plugin).Assembly.GetName().Version?.ToString(3);
+        Bridge = new DiscordBridge(Configuration, Log, GetCharacterLabelOnFrameworkThread, build);
         Bridge.SharedConfigApplied += OnSharedConfigApplied;
         ChatListener = new FreeCompanyChatListener(ChatGui, PlayerState, Configuration, Bridge, Log);
 

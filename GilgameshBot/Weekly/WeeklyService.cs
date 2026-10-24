@@ -48,14 +48,18 @@ public sealed class WeeklyService
     private readonly DiscordSocketClient client;
     private readonly ulong guildId;
     private readonly CalendarService calendar;
+    private readonly Func<bool> isNewest;
     private readonly SemaphoreSlim writeGate = new(1, 1);
 
     /// <summary>Previews and approvals under way, so a disconnect lets them finish their last edit first.</summary>
     private readonly ConcurrentDictionary<Task, byte> jobs = new();
 
     /// <param name="guildId">This session's server, kept as an id (see <see cref="CalendarService"/>).</param>
-    public WeeklyService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, CalendarService calendar)
+    /// <param name="isNewest">True while this plugin is the newest online: only then does the hourly refresh write.</param>
+    public WeeklyService(Configuration config, IPluginLog log, DiscordSocketClient client, ulong guildId, CalendarService calendar,
+        Func<bool> isNewest)
     {
+        this.isNewest = isNewest;
         this.config = config;
         this.log = log;
         this.client = client;
@@ -827,7 +831,8 @@ public sealed class WeeklyService
 
             while (!ct.IsCancellationRequested)
             {
-                if (config.IsWeeklyConfigured)
+                // Only the newest plugin online: an older one would rebuild the weekly without what it does not know.
+                if (config.IsWeeklyConfigured && isNewest())
                     await RefreshAsync(ct);
 
                 var now = DateTimeOffset.UtcNow;

@@ -53,11 +53,20 @@ public sealed class DiscordBridge : IDisposable
     private readonly object gate = new();
 
     private Session? session;
+    private readonly string build;
+
+    /// <summary>
+    /// How long a plugin that is not the newest online waits before answering a click, a form or a
+    /// command, so the newest one answers first; well inside Discord's three seconds.
+    /// </summary>
+    private static readonly TimeSpan BackupDelay = TimeSpan.FromMilliseconds(1500);
     private Task? teardownTask;
     private int relayedCount;
 
-    public DiscordBridge(Configuration config, IPluginLog log, Func<Task<string>> characterLabelProvider)
+    /// <param name="build">This plugin's build for the presence message: "dev", or "v" + its version.</param>
+    public DiscordBridge(Configuration config, IPluginLog log, Func<Task<string>> characterLabelProvider, string build)
     {
+        this.build = build;
         this.config = config;
         this.log = log;
         this.characterLabelProvider = characterLabelProvider;
@@ -312,17 +321,17 @@ public sealed class DiscordBridge : IDisposable
             if (s.Coordinator is null)
             {
                 var coordinator = new PresenceCoordinator(config, log, s.Client, stateChannel, branch.ChannelId, characterLabelProvider,
-                    problem => ReportCoordinatorProblem(s, problem));
+                    problem => ReportCoordinatorProblem(s, problem), build);
                 coordinator.LeadershipChanged += (leader, reclaim) => OnLeadershipChanged(s, leader, reclaim);
                 s.Coordinator = coordinator;
                 s.Presence = Task.Run(() => coordinator.RunAsync(s.Cts.Token));
 
                 // The Free Company calendar, when it is on this server: refreshed hourly when due.
-                s.Calendar = new CalendarService(config, log, s.Client, guild.Id);
+                s.Calendar = new CalendarService(config, log, s.Client, guild.Id, () => coordinator.IsNewest);
                 s.CalendarLoop = Task.Run(() => s.Calendar.RunAsync(s.Cts.Token));
 
                 // The Fat Cat Weekly, when it is on this server: its events refreshed hourly.
-                s.Weekly = new WeeklyService(config, log, s.Client, guild.Id, s.Calendar);
+                s.Weekly = new WeeklyService(config, log, s.Client, guild.Id, s.Calendar, () => coordinator.IsNewest);
                 s.WeeklyLoop = Task.Run(() => s.Weekly.RunAsync(s.Cts.Token));
 
                 // The bot's own slash commands. Registration is a few REST round trips against
@@ -475,7 +484,37 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
             return Task.CompletedTask;
 
-        return slash.HandleAsync(command, s.Cts.Token);
+        return AnswerAsync(s, () => slash.HandleAsync(command, s.Cts.Token));
+    }
+
+    /// <summary>
+    /// Runs an interaction handler: straight away on the newest plugin online, after
+    /// <see cref="BackupDelay"/> (off the gateway task) on the others, which then find it
+    /// acknowledged already (40060, swallowed by every handler) unless the newest one is gone.
+    /// </summary>
+    private Task AnswerAsync(Session s, Func<Task> handler)
+    {
+        if (s.Coordinator is not { IsNewest: false })
+            return handler();
+
+        var ct = s.Cts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(BackupDelay, ct);
+                await handler();
+            }
+            catch (OperationCanceledException)
+            {
+                // Disconnecting.
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Answering an interaction as backup failed.");
+            }
+        }, CancellationToken.None);
+        return Task.CompletedTask;
     }
 
     /// <summary>Autocomplete for the bot's slash commands; one quick REST reply, answered like the commands.</summary>
@@ -484,7 +523,7 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Slash is not { } slash)
             return Task.CompletedTask;
 
-        return slash.HandleAutocompleteAsync(interaction, s.Cts.Token);
+        return AnswerAsync(s, () => slash.HandleAutocompleteAsync(interaction, s.Cts.Token));
     }
 
     /// <summary>A button click or menu pick; only the calendar's and the weekly's are answered, by any connected plugin.</summary>
@@ -494,9 +533,9 @@ public sealed class DiscordBridge : IDisposable
             return Task.CompletedTask;
 
         // Each one ignores what is not its own, by custom id prefix.
-        return component.Data.CustomId.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal)
+        return AnswerAsync(s, () => component.Data.CustomId.StartsWith(WeeklyMessage.Prefix, StringComparison.Ordinal)
             ? weekly.HandleComponentAsync(component, s.Cts.Token)
-            : calendar.HandleComponentAsync(component, s.Cts.Token);
+            : calendar.HandleComponentAsync(component, s.Cts.Token));
     }
 
     /// <summary>A submitted form; only the weekly has one, answered by any connected plugin.</summary>
@@ -505,7 +544,7 @@ public sealed class DiscordBridge : IDisposable
         if (!IsCurrent(s) || s.Cts.IsCancellationRequested || s.Weekly is not { } weekly)
             return Task.CompletedTask;
 
-        return weekly.HandleModalAsync(modal, s.Cts.Token);
+        return AnswerAsync(s, () => weekly.HandleModalAsync(modal, s.Cts.Token));
     }
 
     private Task OnDisconnectedAsync(Session s, Exception exception)

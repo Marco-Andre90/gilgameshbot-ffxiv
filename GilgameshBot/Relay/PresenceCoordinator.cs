@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Discord;
 using Discord.Net;
 using Discord.WebSocket;
@@ -38,10 +39,18 @@ namespace GilgameshBot.Relay;
 /// exception is deleting messages older than 10 minutes, which are leftovers from crashed
 /// instances; anyone may clean those up.
 /// </para>
+/// <para>
+/// <b>Newest build.</b> Every presence message ends with the plugin's build (<c> · v0.18.0</c>, or
+/// <c> · dev</c> for a dev plugin), after the beat, where plugins that predate it ignore it. Among
+/// every alive message in the channel, all branches, the highest build is the
+/// <see cref="IsNewest"/> one: it answers the calendar's and the weekly's clicks straight away
+/// and does their hourly writes; the others answer only as backup, a moment later. A dev plugin
+/// outranks any release (it is stamped 0.1.0); messages without a build rank lowest.
+/// </para>
 /// <para>Thread model: <see cref="RunAsync"/> owns all mutation; the public state is read from the
 /// game thread (UI, Enqueue) and is published through volatile / interlocked fields.</para>
 /// </remarks>
-public sealed class PresenceCoordinator
+public sealed partial class PresenceCoordinator
 {
     /// <summary>Marks a message as a presence message. Combined with "authored by this bot".</summary>
     private const string Prefix = "🎮 ";
@@ -53,6 +62,15 @@ public sealed class PresenceCoordinator
     private readonly string branchTag;
 
     private const string BeatSeparator = " · beat ";
+
+    /// <summary>Follows the beat number: <c> · v0.18.0</c> or <c> · dev</c>.</summary>
+    private const string BuildSeparator = " · ";
+
+    [GeneratedRegex(@" · beat \d+ · (dev|v\d+(?:\.\d+){1,3})$")]
+    private static partial Regex BuildRegex();
+
+    /// <summary>This plugin's build: "dev", or "v" + its version.</summary>
+    private readonly string build;
 
     /// <summary>Presence messages older than this are debris from crashed instances.</summary>
     private static readonly TimeSpan CleanupAge = TimeSpan.FromMinutes(10);
@@ -82,6 +100,8 @@ public sealed class PresenceCoordinator
     private ulong? lastLeaderId;
 
     private volatile bool isLeader;
+    private volatile bool isNewest = true;
+    private volatile string? newestBuild;
     private volatile string? leaderLabel;
     private int queuePosition;
     private int alivePeers;
@@ -93,9 +113,11 @@ public sealed class PresenceCoordinator
         SocketTextChannel stateChannel,
         ulong relayChannelId,
         Func<Task<string>> characterLabelProvider,
-        Action<string?> reportProblem)
+        Action<string?> reportProblem,
+        string build)
     {
         branchTag = $"[{relayChannelId}] ";
+        this.build = build;
         this.reportProblem = reportProblem;
         this.config = config;
         this.log = log;
@@ -120,6 +142,19 @@ public sealed class PresenceCoordinator
 
     /// <summary>Number of other alive instances.</summary>
     public int AlivePeers => Volatile.Read(ref alivePeers);
+
+    /// <summary>
+    /// True when no alive plugin in the state channel has a higher build than this one (ties count
+    /// as newest). True until the channel was read, and whenever it cannot be: the plugin then
+    /// behaves as if it were alone, as plugins did before builds were compared.
+    /// </summary>
+    public bool IsNewest => isNewest;
+
+    /// <summary>This plugin's build: "dev", or "v" + its version.</summary>
+    public string Build => build;
+
+    /// <summary>The highest build alive in the state channel, when it is not this plugin's; else null.</summary>
+    public string? NewerBuild => newestBuild;
 
     /// <summary>Character label of the current leader, if known.</summary>
     public string? LeaderLabel => leaderLabel;
@@ -398,7 +433,39 @@ public sealed class PresenceCoordinator
 
         SetLeadership(ownId is not null && leader is not null && leader.Id == ownId);
         lastLeaderId = leader?.Id;
+
+        // Every branch's plugins: the calendar and the weekly belong to the server, not the branch.
+        var newest = allPresence
+            .Where(m => serverNow - LastTouched(m) < stale)
+            .Select(m => ReadBuild(m.Content))
+            .Append(build)
+            .MaxBy(Rank)!;
+        SetNewest(Rank(newest).CompareTo(Rank(build)) <= 0, newest);
     }
+
+    private void SetNewest(bool value, string newest)
+    {
+        newestBuild = value ? null : newest;
+        if (isNewest == value)
+            return;
+
+        isNewest = value;
+        if (value)
+            log.Information("This plugin ({Build}) is now the newest online: it answers the calendar's and the weekly's buttons first.", build);
+        else
+            log.Information("A newer plugin ({Newest}) is online: this one ({Build}) answers the calendar's and the weekly's buttons only as backup.",
+                newest, build);
+    }
+
+    /// <summary>The build at the end of a presence message; "" for plugins that predate it.</summary>
+    private static string ReadBuild(string content) =>
+        BuildRegex().Match(content) is { Success: true } m ? m.Groups[1].Value : string.Empty;
+
+    /// <summary>Orders builds: none, then releases by version, then dev.</summary>
+    private static (int, Version) Rank(string build) =>
+        build == "dev" ? (2, new Version(0, 0))
+        : build.Length > 1 && Version.TryParse(build[1..], out var v) ? (1, v)
+        : (0, new Version(0, 0));
 
     /// <summary>Removes debris left behind by instances that crashed. Bot's own messages only.</summary>
     private async Task CleanUpAsync(List<IMessage> presence, DateTimeOffset serverNow, CancellationToken ct)
@@ -537,12 +604,13 @@ public sealed class PresenceCoordinator
 
     private static DateTimeOffset LastTouched(IMessage message) => message.EditedTimestamp ?? message.Timestamp;
 
-    private string BuildContent() => $"{Prefix}{branchTag}{label}{BeatSeparator}{beat}";
+    private string BuildContent() => $"{Prefix}{branchTag}{label}{BeatSeparator}{beat}{BuildSeparator}{build}";
 
     /// <summary>Reads the character label back out of a peer's presence message.</summary>
     private string ExtractLabel(string content)
     {
         var body = content[(Prefix.Length + branchTag.Length)..];
+        // The build after the beat goes with it.
         var cut = body.LastIndexOf(BeatSeparator, StringComparison.Ordinal);
         return (cut < 0 ? body : body[..cut]).Trim();
     }
