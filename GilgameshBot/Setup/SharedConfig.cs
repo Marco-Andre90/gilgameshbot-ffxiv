@@ -60,6 +60,10 @@ public sealed class SharedConfigFile
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WeeklyApproval { get; set; }
 
+    [JsonPropertyName("weeklyScreenshots")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WeeklyScreenshots { get; set; }
+
     [JsonPropertyName("fcLeader")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FcLeader { get; set; }
@@ -175,7 +179,7 @@ public static class SharedConfig
 
         (parsed.Heartbeat, parsed.Stale) = SetupCode.ClampTimers(parsed.Heartbeat, parsed.Stale);
         (parsed.CalendarChannelId, parsed.ApolloChannelIds) = SetupCode.ParseCalendar(parsed.CalendarChannel, parsed.ApolloChannels, parsed.Branches!);
-        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.Branches!);
+        parsed.Weekly = SetupCode.ParseWeekly(parsed.WeeklyChannel, parsed.WeeklyApproval, parsed.WeeklyScreenshots, parsed.Branches!);
         parsed.FcLeaderId = SetupCode.ParseLeader(parsed.FcLeader);
 
         var by = (parsed.PublishedBy ?? string.Empty).Trim();
@@ -349,6 +353,7 @@ public static class SharedConfig
                 CarriesWeekly = true,
                 WeeklyChannel = SetupCode.FormatWeekly(config).Channel,
                 WeeklyApproval = SetupCode.FormatWeekly(config).Approval,
+                WeeklyScreenshots = SetupCode.FormatWeekly(config).Screenshots,
                 FcLeader = SetupCode.FormatLeader(config),
             };
 

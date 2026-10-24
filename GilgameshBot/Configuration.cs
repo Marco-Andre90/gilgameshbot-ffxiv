@@ -244,6 +244,11 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Channel where a weekly is written and previewed, and approved or rejected, before it goes out.</summary>
     public ulong WeeklyApprovalChannelId { get; set; }
 
+    /// <summary>
+    /// Channel of members' screenshots: the one with the most reactions over the week goes in the
+    /// weekly as the Screenshot of the Week. Only read, on the weekly's server. 0 for no such section.
+    /// </summary>
+    public ulong WeeklyScreenshotChannelId { get; set; }
 
     /// <summary>
     /// Personal: a weekly started from this plugin's settings window is a draft — previewed
@@ -283,6 +288,7 @@ public sealed class Configuration : IPluginConfiguration
         {
             WeeklyChannelId = 0;
             WeeklyApprovalChannelId = 0;
+            WeeklyScreenshotChannelId = 0;
         }
     }
 

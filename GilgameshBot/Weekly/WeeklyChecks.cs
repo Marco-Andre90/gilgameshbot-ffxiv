@@ -12,10 +12,11 @@ namespace GilgameshBot.Weekly;
 /// <param name="ApprovalHome">Where the previews' webhook lives, like <paramref name="WebhookHome"/>.</param>
 /// <param name="ApprovalThreadId">The approval thread, like <paramref name="ThreadId"/>.</param>
 /// <param name="Leader">The FC leader, who approves or rejects previews; a member of the weekly's server.</param>
+/// <param name="Screenshots">Where the Screenshot of the Week is picked from; null when none is set.</param>
 public sealed record WeeklyTarget(
     ITextChannel Announcement, IIntegrationChannel WebhookHome, ulong? ThreadId,
     ITextChannel Approval, IIntegrationChannel ApprovalHome, ulong? ApprovalThreadId,
-    IUser Leader);
+    IUser Leader, ITextChannel? Screenshots);
 
 /// <summary>Resolves the weekly's channels and role and checks everything it needs before any write.</summary>
 internal static class WeeklyChecks
@@ -37,6 +38,7 @@ internal static class WeeklyChecks
         var channelId = config.WeeklyChannelId;
         var approvalId = config.WeeklyApprovalChannelId;
         var leaderId = config.FcLeaderId;
+        var screenshotsId = config.WeeklyScreenshotChannelId;
 
         if (channelId == 0 || approvalId == 0)
             return (null, "No weekly is set up. Fill in the Weekly Announcements tab and publish it.");
@@ -101,7 +103,23 @@ internal static class WeeklyChecks
                 return (null, "The weekly reads its events from the calendar's Apollo channels, which must be on the weekly's server.");
         }
 
-        return (new WeeklyTarget(announcement, home, threadId, approval, approvalHome, approvalThreadId, leader), null);
+        // Optional, and only read; but once set, an unreadable one stops the weekly rather than
+        // quietly leaving the section out.
+        ITextChannel? screenshots = null;
+        if (screenshotsId != 0)
+        {
+            if (await CalendarChannels.ResolveAsync(client, screenshotsId, options) is not { } found || found.GuildId != guild.Id)
+                return (null, "The weekly's screenshot channel was not found on the weekly's server, or the bot cannot see it.");
+
+            // Without Read Message History Discord answers an empty list, not an error.
+            if (CalendarChannels.Permissions(client, found) is not { ViewChannel: true, ReadMessageHistory: true })
+                return (null, "The bot needs View Channel and Read Message History in the weekly's screenshot channel "
+                              + "(for a thread, in its parent channel).");
+
+            screenshots = found;
+        }
+
+        return (new WeeklyTarget(announcement, home, threadId, approval, approvalHome, approvalThreadId, leader, screenshots), null);
     }
 
     /// <summary>

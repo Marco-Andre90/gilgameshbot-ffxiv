@@ -191,6 +191,16 @@ public sealed class WeeklyService
                 return;
             }
 
+            // Picked once, here: approving posts the picture the preview carries.
+            var manual = WeeklyMessage.Manual(sections);
+            WeeklyScreenshotFile? screenshot = null;
+            if (target.Screenshots is { } screenshots
+                && await WeeklyScreenshot.PickAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), options, ct) is { } pick)
+            {
+                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick, guildId));
+                screenshot = pick.File;
+            }
+
             await writeGate.WaitAsync(ct);
             ulong previewId;
             string? warning;
@@ -201,7 +211,7 @@ public sealed class WeeklyService
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
                 warning = WeeklyMessage.EarlyWarning(last, lastIssue, now, discord: true);
 
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(sections), issue, now, ct);
+                var (embeds, files) = await BuildAsync(manual, screenshot, issue, now, ct);
                 // Exactly the FC leader, and nobody at all for a draft.
                 var allowed = draft ? AllowedMentions.None : new AllowedMentions { UserIds = [target.Leader.Id] };
 
@@ -459,7 +469,8 @@ public sealed class WeeklyService
                 var now = DateTimeOffset.UtcNow;
                 var (_, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), issue, now, ct);
+                var screenshot = await WeeklyScreenshot.ReadBackAsync(preview, ct);
+                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), screenshot, issue, now, ct);
 
                 var webhook = await WebhookAsync(target.WebhookHome, create: true, options)
                               ?? throw new InvalidOperationException("The webhook could not be created.");
@@ -753,7 +764,9 @@ public sealed class WeeklyService
                 if (WeeklyMessage.EventsText(events, last.Timestamp, guildId) == WeeklyMessage.CurrentEventsText(last))
                     return;
 
-                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), issue, events, last.Timestamp, guildId);
+                // Every file is attached again, so the screenshot too.
+                var screenshot = await WeeklyScreenshot.ReadBackAsync(last, ct);
+                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), screenshot, issue, events, last.Timestamp, guildId);
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
@@ -797,10 +810,10 @@ public sealed class WeeklyService
 
     /// <summary>The message for <paramref name="issue"/>, with the events of the week from <paramref name="from"/>.</summary>
     private async Task<(Embed[] Embeds, List<(string Name, byte[] Bytes)> Files)> BuildAsync(
-        List<EmbedBuilder> manual, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
+        List<EmbedBuilder> manual, WeeklyScreenshotFile? screenshot, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
     {
         var events = await EventsAsync(ct);
-        return WeeklyMessage.Assemble(manual, issue, events, from, guildId);
+        return WeeklyMessage.Assemble(manual, screenshot, issue, events, from, guildId);
     }
 
     /// <summary>The calendar's Apollo events; none when no Apollo channel is set. Throws <see cref="CalendarSourceException"/> on an unreadable one.</summary>
