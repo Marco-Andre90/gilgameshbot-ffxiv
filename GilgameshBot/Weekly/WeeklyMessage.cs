@@ -398,10 +398,10 @@ public static partial class WeeklyMessage
 
     /// <summary>
     /// Approve / Reject on a preview; Delete draft on a draft. With <paramref name="screenshots"/>,
-    /// a menu under them to pick another Screenshot of the Week (or none), <paramref name="selected"/> shown.
+    /// a menu under them to pick another Screenshot of the Week (or none). It shows no choice: the
+    /// preview does, and a pick edits only the preview's embeds and files, never its buttons.
     /// </summary>
-    public static MessageComponent PreviewButtons(bool draft, ulong authorId,
-        IReadOnlyList<WeeklyScreenshotCandidate>? screenshots = null, string? selected = null)
+    public static MessageComponent PreviewButtons(bool draft, ulong authorId, IReadOnlyList<WeeklyScreenshotCandidate>? screenshots = null)
     {
         var builder = draft
             ? new ComponentBuilder().WithButton(DeleteLabel(true), DeleteId + authorId, ButtonStyle.Secondary)
@@ -422,10 +422,10 @@ public static partial class WeeklyMessage
                 var label = $"{name} · {Reactions(c.Reactions)}";
                 var description = (c.Pictures > 1 ? $"Image {c.Index + 1} of {c.Pictures} · " : "")
                                   + "posted " + c.Post.Timestamp.UtcDateTime.ToString("MMM d", CultureInfo.InvariantCulture);
-                menu.AddOption(Cap(label), c.Value, Cap(description), isDefault: c.Value == selected);
+                menu.AddOption(Cap(label), c.Value, Cap(description));
             }
 
-            menu.AddOption("No screenshot", WeeklyScreenshot.NoneValue, "Leave the section out", isDefault: selected == WeeklyScreenshot.NoneValue);
+            menu.AddOption("No screenshot", WeeklyScreenshot.NoneValue, "Leave the section out");
             builder.WithSelectMenu(menu, row: 1);
         }
 
@@ -435,34 +435,9 @@ public static partial class WeeklyMessage
     /// <summary>Menu labels and descriptions hold 100 characters.</summary>
     private static string Cap(string text) => text.Length <= 100 ? text : text[..99] + "…";
 
-    /// <summary>A preview's buttons and menu as they are, with <paramref name="selected"/> shown in the screenshot menu.</summary>
-    public static MessageComponent Rechoose(IMessage preview, string selected)
-    {
-        var builder = new ComponentBuilder();
-        var row = 0;
-        foreach (var r in preview.Components.OfType<ActionRowComponent>())
-        {
-            foreach (var c in r.Components)
-            {
-                switch (c)
-                {
-                    case ButtonComponent button:
-                        builder.WithButton(button.ToBuilder(), row);
-                        break;
-                    case SelectMenuComponent menu:
-                        var copy = menu.ToBuilder();
-                        foreach (var o in copy.Options)
-                            o.IsDefault = o.Value == selected;
-                        builder.WithSelectMenu(copy, row);
-                        break;
-                }
-            }
-
-            row++;
-        }
-
-        return builder.Build();
-    }
+    /// <summary>The id of the Screenshot of the Week's attached picture; 0 without one. Changes with every pick.</summary>
+    public static ulong ScreenshotFileId(IMessage message) =>
+        message.Attachments.FirstOrDefault(a => a.Filename.StartsWith(WeeklyScreenshot.FilePrefix, StringComparison.Ordinal))?.Id ?? 0;
 
     /// <summary>
     /// Delete draft, or Delete preview on a preview that was posted or rejected, so the approval

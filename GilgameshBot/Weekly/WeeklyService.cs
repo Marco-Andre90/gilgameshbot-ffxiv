@@ -195,7 +195,6 @@ public sealed class WeeklyService
             var manual = WeeklyMessage.Manual(sections);
             WeeklyScreenshotFile? screenshot = null;
             List<WeeklyScreenshotCandidate> candidates = [];
-            var selected = WeeklyScreenshot.NoneValue;
             if (target.Screenshots is { } screenshots)
             {
                 candidates = await WeeklyScreenshot.CandidatesAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), log, options);
@@ -203,7 +202,6 @@ public sealed class WeeklyService
                 {
                     manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
                     screenshot = pick.File;
-                    selected = pick.Candidate.Value;
                 }
             }
 
@@ -233,7 +231,7 @@ public sealed class WeeklyService
                     previewId = await hook.SendFilesAsync(attachments,
                         WeeklyMessage.PreviewText(issue.Number, modal.User, draft ? null : target.Leader, warning),
                         embeds: embeds, username: WeeklyMessage.Name, avatarUrl: webhook.GetAvatarUrl(), options: options,
-                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id, candidates, selected),
+                        allowedMentions: allowed, components: WeeklyMessage.PreviewButtons(draft, modal.User.Id, candidates),
                         threadId: target.ApprovalThreadId);
                 }
                 finally
@@ -471,11 +469,12 @@ public sealed class WeeklyService
             var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
             try
             {
+                // Embeds and files only: the buttons may carry an Approve's claim by now, and a
+                // claim must never be overwritten.
                 await component.ModifyOriginalResponseAsync(p =>
                 {
                     p.Embeds = embeds;
                     p.Attachments = attachments;
-                    p.Components = WeeklyMessage.Rechoose(fresh, value);
                     p.AllowedMentions = AllowedMentions.None;
                 }, options);
             }
@@ -572,8 +571,9 @@ public sealed class WeeklyService
                 var now = DateTimeOffset.UtcNow;
                 var (_, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
-                var screenshot = await WeeklyScreenshot.ReadBackAsync(preview, ct);
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(preview), screenshot, issue, now, ct);
+                // From the preview as it is now, claimed: its screenshot may have been changed since the click.
+                var screenshot = await WeeklyScreenshot.ReadBackAsync(settled, ct);
+                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(settled), screenshot, issue, now, ct);
 
                 var webhook = await WebhookAsync(target.WebhookHome, create: true, options)
                               ?? throw new InvalidOperationException("The webhook could not be created.");
@@ -623,6 +623,13 @@ public sealed class WeeklyService
                 if (claimedAt.Elapsed > ClaimDeadline)
                 {
                     await RestoreAsync(component, head, "it took too long to build", options);
+                    return;
+                }
+
+                // A screenshot change that was under way when the claim landed: post what is shown, not what was.
+                if (WeeklyMessage.ScreenshotFileId(stillOurs) != WeeklyMessage.ScreenshotFileId(settled))
+                {
+                    await RestoreAsync(component, head, "the screenshot was changed while it was being posted", options);
                     return;
                 }
 
