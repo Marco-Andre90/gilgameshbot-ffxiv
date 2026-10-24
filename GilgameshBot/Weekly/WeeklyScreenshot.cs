@@ -70,7 +70,7 @@ internal static class WeeklyScreenshot
         {
             try
             {
-                var bytes = await Http.GetByteArrayAsync(picture.Url, ct);
+                var bytes = await DownloadAsync(picture.Url, ct);
                 return new WeeklyScreenshotPick(post, reactions, new WeeklyScreenshotFile(FilePrefix + Extension(picture.Filename)[1..], bytes));
             }
             catch (HttpRequestException)
@@ -95,7 +95,23 @@ internal static class WeeklyScreenshot
         var picture = message.Attachments.FirstOrDefault(a => a.Filename.StartsWith(FilePrefix, StringComparison.Ordinal))
                       ?? throw new InvalidOperationException("The Screenshot of the Week's picture is missing from the weekly.");
 
-        return new WeeklyScreenshotFile(picture.Filename, await Http.GetByteArrayAsync(picture.Url, ct));
+        return new WeeklyScreenshotFile(picture.Filename, await DownloadAsync(picture.Url, ct));
+    }
+
+    /// <summary>
+    /// A picture from Discord's CDN. A timeout is an <see cref="HttpRequestException"/> here, not the
+    /// <see cref="TaskCanceledException"/> HttpClient throws, which callers would take for a disconnect.
+    /// </summary>
+    private static async Task<byte[]> DownloadAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            return await Http.GetByteArrayAsync(url, ct);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Downloading the screenshot timed out.", ex);
+        }
     }
 
     /// <summary>A picture a member posted openly: an image type, not a spoiler, small enough to re-upload.</summary>
