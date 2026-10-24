@@ -43,7 +43,7 @@ namespace GilgameshBot.Relay;
 /// <b>Newest build.</b> Every presence message ends with the plugin's build (<c> · v0.18.0</c>, or
 /// <c> · dev</c> for a dev plugin), after the beat, where plugins that predate it ignore it. Among
 /// every alive message in the channel, all branches, the highest build is the
-/// <see cref="IsNewest"/> one: it answers the calendar's and the weekly's clicks straight away
+/// <see cref="IsNewestFor"/> one: it answers the calendar's and the weekly's clicks straight away
 /// and does their hourly writes; the others answer only as backup, a moment later. A dev plugin
 /// outranks any release (it is stamped 0.1.0); messages without a build rank lowest. The build is
 /// followed by what the plugin has set up (<c>c</c> calendar, <c>w</c> weekly): a plugin only
@@ -146,9 +146,9 @@ public sealed partial class PresenceCoordinator
     public int AlivePeers => Volatile.Read(ref alivePeers);
 
     /// <summary>
-    /// True when no alive plugin in the state channel has a higher build than this one (ties count
-    /// as newest). True until the channel was read, and whenever it cannot be: the plugin then
-    /// behaves as if it were alone, as plugins did before builds were compared.
+    /// True unless an alive plugin in the state channel has a higher build than this one and has
+    /// the feature set up (ties count as newest). True until the channel was read, and once the
+    /// coordinator stops: the plugin then behaves as if it were alone, as before builds were compared.
     /// </summary>
     /// <param name="weekly">The weekly's turn; false for the calendar's.</param>
     public bool IsNewestFor(bool weekly) => weekly ? newestWeekly : newestCalendar;
