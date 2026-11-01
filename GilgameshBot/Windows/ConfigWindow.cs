@@ -1620,7 +1620,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
         ImGuiComponents.HelpMarker(
             "The FC leader's Discord user ID. Features that need an approval ask the leader: the weekly's previews mention them, "
-            + "and only they can approve or reject one. Copy it with Developer Mode on: right-click the leader → Copy User ID. "
+            + "and only they can approve one (its author may also reject it). Copy it with Developer Mode on: right-click the leader → Copy User ID. "
             + "Part of the shared configuration: publish it to share it.");
 
         if (ImGui.Button("Save FC leader", ImGuiHelpers.ScaledVector2(180, 0)))

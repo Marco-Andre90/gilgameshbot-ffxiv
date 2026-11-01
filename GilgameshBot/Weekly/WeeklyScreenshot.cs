@@ -202,19 +202,27 @@ internal static class WeeklyScreenshot
             throw new InvalidOperationException("The Screenshot of the Week's picture is missing from the weekly.");
 
         var files = new List<WeeklyScreenshotFile>();
-        foreach (var picture in pictures)
-            files.Add(new WeeklyScreenshotFile(picture.Filename, await DownloadAsync(picture.Url, ct)));
+        foreach (var (name, url) in pictures)
+            files.Add(new WeeklyScreenshotFile(name, await DownloadAsync(url, ct)));
 
         return files;
     }
 
-    /// <summary>The Screenshot of the Week's attachments on a preview or a posted weekly, in order.</summary>
-    public static List<IAttachment> Attached(IMessage message) =>
-        message.Attachments
-            .Select(a => (Attachment: a, Order: FileOrder(a.Filename)))
-            .Where(a => a.Order >= 0)
-            .OrderBy(a => a.Order)
-            .Select(a => a.Attachment)
+    /// <summary>
+    /// The Screenshot of the Week's pictures on a preview or a posted weekly, in order: file name and
+    /// CDN url. Discord lists a file shown in an embed only as that embed's image, not among the
+    /// message's attachments, so both are looked at.
+    /// </summary>
+    public static List<(string Name, string Url)> Attached(IMessage message) =>
+        message.Embeds.Select(e => e.Image?.Url)
+            .OfType<string>()
+            .Select(url => (Name: Uri.TryCreate(url, UriKind.Absolute, out var uri) ? Path.GetFileName(uri.AbsolutePath) : "", Url: url))
+            .Concat(message.Attachments.Select(a => (Name: a.Filename, a.Url)))
+            .Select(p => (p.Name, p.Url, Order: FileOrder(p.Name)))
+            .Where(p => p.Order >= 0)
+            .DistinctBy(p => p.Order)
+            .OrderBy(p => p.Order)
+            .Select(p => (p.Name, p.Url))
             .ToList();
 
     private static List<WeeklyScreenshotCandidate> Ranked(IEnumerable<WeeklyScreenshotCandidate> candidates) =>
