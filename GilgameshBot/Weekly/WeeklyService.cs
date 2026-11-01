@@ -354,17 +354,22 @@ public sealed class WeeklyService
 
             if (id is WeeklyMessage.ApproveId or WeeklyMessage.RejectId)
             {
-                if (!isApprover)
+                var approve = id == WeeklyMessage.ApproveId;
+                // Approving is the leader's alone; its author may also take a preview back.
+                if (!isApprover && (approve || component.User.Id != WeeklyMessage.AuthorOf(component.Message)))
                 {
                     await component.RespondAsync(leaderId != 0
-                            ? $"Only the FC leader, <@{leaderId}>, can approve or reject the weekly."
-                            : "No FC leader is set (plugin's Advanced tab), so nobody can approve or reject the weekly.",
+                            ? approve
+                                ? $"Only the FC leader, <@{leaderId}>, can approve the weekly."
+                                : $"Only its author or the FC leader, <@{leaderId}>, can reject the weekly."
+                            : approve
+                                ? "No FC leader is set (plugin's Advanced tab), so nobody can approve the weekly."
+                                : "Only its author can reject the weekly while no FC leader is set (plugin's Advanced tab).",
                         ephemeral: true, allowedMentions: AllowedMentions.None, options: options);
                     return;
                 }
 
                 await component.DeferAsync(options: options);
-                var approve = id == WeeklyMessage.ApproveId;
                 Track(() => approve ? ApproveAsync(component, ct) : RejectAsync(component, ct));
                 return;
             }

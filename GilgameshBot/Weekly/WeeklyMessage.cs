@@ -488,9 +488,9 @@ public static partial class WeeklyMessage
     /// <summary>Menu labels and descriptions hold 100 characters.</summary>
     private static string Cap(string text) => text.Length <= 100 ? text : text[..99] + "…";
 
-    /// <summary>The ids of the Screenshot of the Week's attached pictures, in order; empty without any. Changes with every pick.</summary>
+    /// <summary>The Screenshot of the Week's picture urls (their attachment ids), in order; empty without any. Changes with every pick.</summary>
     public static string ScreenshotFileIds(IMessage message) =>
-        string.Join(",", WeeklyScreenshot.Attached(message).Select(a => a.Id));
+        string.Join(",", WeeklyScreenshot.Attached(message).Select(a => a.Url.Split('?')[0]));
 
     /// <summary>
     /// Delete draft, or Delete preview on a preview that was posted or rejected, so the approval
