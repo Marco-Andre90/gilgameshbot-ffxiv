@@ -3,11 +3,11 @@ using Discord;
 
 namespace GilgameshBot.Weekly;
 
-/// <summary>The Screenshot of the Week's picture as it is attached to the weekly.</summary>
-/// <param name="Name">File name: <c>screenshot</c> plus the original's extension.</param>
+/// <summary>One of the Screenshot of the Week's pictures as it is attached to the weekly.</summary>
+/// <param name="Name">File name: <c>screenshot</c> (<c>screenshot-2</c>, <c>screenshot-3</c> for the others) plus the original's extension.</param>
 public sealed record WeeklyScreenshotFile(string Name, byte[] Bytes);
 
-/// <summary>One picture of the screenshot channel that may be the Screenshot of the Week.</summary>
+/// <summary>One picture of the screenshot channel that may be in the Screenshot of the Week.</summary>
 /// <param name="Index">Which of the post's attachments it is.</param>
 /// <param name="Pictures">How many pictures the post has, for "image 2 of 3".</param>
 public sealed record WeeklyScreenshotCandidate(IMessage Post, int Index, int Pictures, IAttachment Picture, int Reactions)
@@ -16,21 +16,25 @@ public sealed record WeeklyScreenshotCandidate(IMessage Post, int Index, int Pic
     public string Value => $"{Post.Id}:{Index}";
 }
 
-/// <summary>The screenshot picked for a weekly: the picture and its file.</summary>
+/// <summary>A screenshot picked for a weekly: the picture and its file.</summary>
 public sealed record WeeklyScreenshotPick(WeeklyScreenshotCandidate Candidate, WeeklyScreenshotFile File);
 
 /// <summary>
 /// The Screenshot of the Week: the members' pictures in the screenshot channel over the week,
-/// read over REST, the one with the most reactions picked for the preview. The preview's menu
-/// offers the others; the preview and the posted weekly carry the chosen one as an attachment,
-/// which approving and the hourly refresh read back, so what the FC leader approved is what goes out.
+/// read over REST. The preview gets the post with the most reactions, and the posts tied with it
+/// up to <see cref="MaxPictures"/>; its menu picks others. The preview and the posted weekly carry
+/// the chosen ones as attachments, which approving and the hourly refresh read back, so what the
+/// FC leader approved is what goes out.
 /// </summary>
 internal static class WeeklyScreenshot
 {
-    public const string FilePrefix = "screenshot.";
+    /// <summary>Pictures in the section at most: Discord shows them as one gallery.</summary>
+    public const int MaxPictures = 3;
 
     /// <summary>The menu value for no Screenshot of the Week.</summary>
     public const string NoneValue = "none";
+
+    private const string FileStem = "screenshot";
 
     /// <summary>How far back the channel is read, in pages of 100 messages.</summary>
     private const int MaxPages = 10;
@@ -38,7 +42,10 @@ internal static class WeeklyScreenshot
     /// <summary>Larger pictures are passed over: they go out with the header and thumbnails in one upload.</summary>
     private const int MaxBytes = 8 * 1024 * 1024;
 
-    /// <summary>Candidates tried, best first, when a download fails.</summary>
+    /// <summary>Kept free of the server's upload limit for the header and thumbnails.</summary>
+    private const long ReservedBytes = 2 * 1024 * 1024;
+
+    /// <summary>Posts tried, best first, while no picture has downloaded.</summary>
     private const int MaxTries = 3;
 
     private static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
@@ -93,76 +100,152 @@ internal static class WeeklyScreenshot
                         + "{Pictures} with a usable picture, {Candidates} pictures on posts with reactions.",
             channel.Name, from, posts, withFiles, withPictures, candidates.Count);
 
-        return candidates
-            .OrderByDescending(c => c.Reactions)
-            .ThenBy(c => c.Post.Id)
-            .ThenBy(c => c.Index)
-            .ToList();
+        return Ranked(candidates);
     }
 
-    /// <summary>The first of <paramref name="candidates"/> whose picture downloads, trying a few posts; null when none does.</summary>
-    public static async Task<WeeklyScreenshotPick?> PickAsync(IReadOnlyList<WeeklyScreenshotCandidate> candidates, IPluginLog log, CancellationToken ct)
+    /// <summary>
+    /// The pictures for a new preview: the best post's, and those of the posts tied with it, one
+    /// picture per post, up to <see cref="MaxPictures"/>. A picture that does not download is passed
+    /// over (a few posts are tried while none has), and so is one that would take the upload past
+    /// <paramref name="maxUpload"/>; tied posts are never made up for with lesser ones. Empty when none does.
+    /// </summary>
+    public static async Task<List<WeeklyScreenshotPick>> PickAsync(
+        IReadOnlyList<WeeklyScreenshotCandidate> candidates, ulong maxUpload, IPluginLog log, CancellationToken ct)
     {
+        var picks = new List<WeeklyScreenshotPick>();
+        var budget = Budget(maxUpload);
+        var tries = 0;
+
         // The best picture of each post: a post whose first picture fails is passed over whole.
-        foreach (var candidate in candidates.DistinctBy(c => c.Post.Id).Take(MaxTries))
+        foreach (var candidate in candidates.DistinctBy(c => c.Post.Id))
         {
+            if (picks.Count == MaxPictures
+                || (picks.Count > 0 && candidate.Reactions < picks[0].Candidate.Reactions)
+                || (picks.Count == 0 && tries == MaxTries))
+                break;
+
+            if (candidate.Picture.Size > budget)
+                continue;
+
+            tries++;
             try
             {
-                return new WeeklyScreenshotPick(candidate, await DownloadAsync(candidate, ct));
+                var pick = new WeeklyScreenshotPick(candidate, await DownloadAsync(candidate, picks.Count, ct));
+                picks.Add(pick);
+                budget -= pick.File.Bytes.Length;
             }
             catch (HttpRequestException ex)
             {
-                // Gone meanwhile, or the CDN refused it: the next best.
+                // Gone meanwhile, or the CDN refused it: the next one.
                 log.Warning("Screenshot of the Week: could not download the picture of message {Message}: {Error}", candidate.Post.Id, ex.Message);
             }
         }
 
-        return null;
+        return picks;
     }
 
     /// <summary>
-    /// The picture a preview's menu names (<see cref="WeeklyScreenshotCandidate.Value"/>), read again
-    /// from <paramref name="channel"/> with its reactions as they are now; null for
-    /// <see cref="NoneValue"/>. Throws when the post or its picture is gone.
+    /// The pictures a preview's menu names (<see cref="WeeklyScreenshotCandidate.Value"/>), read
+    /// again from <paramref name="channel"/> with their reactions as they are now, best first;
+    /// empty when <see cref="NoneValue"/> is among them. Throws when a post or its picture is gone,
+    /// or when together they would take the upload past <paramref name="maxUpload"/>.
     /// </summary>
-    public static async Task<WeeklyScreenshotPick?> ChooseAsync(ITextChannel channel, string value, RequestOptions options, CancellationToken ct)
+    public static async Task<List<WeeklyScreenshotPick>> ChooseAsync(
+        ITextChannel channel, IReadOnlyCollection<string> values, ulong maxUpload, RequestOptions options, CancellationToken ct)
     {
-        if (value == NoneValue)
-            return null;
+        if (values.Count == 0 || values.Contains(NoneValue))
+            return [];
 
-        var parts = value.Split(':');
-        if (parts.Length != 2 || !ulong.TryParse(parts[0], out var messageId) || !int.TryParse(parts[1], out var index))
-            throw new InvalidOperationException("Unknown screenshot choice.");
+        var posts = new Dictionary<ulong, IMessage>();
+        var chosen = new List<WeeklyScreenshotCandidate>();
+        foreach (var value in values.Distinct().Take(MaxPictures))
+        {
+            var parts = value.Split(':');
+            if (parts.Length != 2 || !ulong.TryParse(parts[0], out var messageId) || !int.TryParse(parts[1], out var index))
+                throw new InvalidOperationException("Unknown screenshot choice.");
 
-        var post = await ((IMessageChannel)channel).GetMessageAsync(messageId, CacheMode.AllowDownload, options)
-                   ?? throw new InvalidOperationException("That screenshot's post was deleted.");
+            if (!posts.TryGetValue(messageId, out var post))
+                posts[messageId] = post = await ((IMessageChannel)channel).GetMessageAsync(messageId, CacheMode.AllowDownload, options)
+                                          ?? throw new InvalidOperationException("A chosen screenshot's post was deleted.");
 
-        var pictures = Pictures(post);
-        var picture = pictures.FirstOrDefault(p => p.Index == index).Picture
-                      ?? throw new InvalidOperationException("That picture is no longer on its post.");
+            var pictures = Pictures(post);
+            var picture = pictures.FirstOrDefault(p => p.Index == index).Picture
+                          ?? throw new InvalidOperationException("A chosen picture is no longer on its post.");
 
-        var candidate = new WeeklyScreenshotCandidate(post, index, pictures.Count, picture, Reactions(post));
-        return new WeeklyScreenshotPick(candidate, await DownloadAsync(candidate, ct));
+            chosen.Add(new WeeklyScreenshotCandidate(post, index, pictures.Count, picture, Reactions(post)));
+        }
+
+        // Discord sends the values in the menu's order, not the clicks', and reactions may have changed since.
+        chosen = Ranked(chosen);
+        if (chosen.Sum(c => (long)c.Picture.Size) > Budget(maxUpload))
+            throw new InvalidOperationException("Those pictures are too large to go out together.");
+
+        var picks = new List<WeeklyScreenshotPick>();
+        foreach (var candidate in chosen)
+            picks.Add(new WeeklyScreenshotPick(candidate, await DownloadAsync(candidate, picks.Count, ct)));
+
+        return picks;
     }
 
     /// <summary>
-    /// The picture a preview or a posted weekly carries for its Screenshot of the Week; null when it
-    /// has none. Throws when the embed is there but its picture cannot be read back, so the weekly is
-    /// never rewritten without it.
+    /// The pictures a preview or a posted weekly carries for its Screenshot of the Week, in order;
+    /// empty when it has none. Throws when the embed is there but its pictures cannot be read back,
+    /// so the weekly is never rewritten without them.
     /// </summary>
-    public static async Task<WeeklyScreenshotFile?> ReadBackAsync(IMessage message, CancellationToken ct)
+    public static async Task<List<WeeklyScreenshotFile>> ReadBackAsync(IMessage message, CancellationToken ct)
     {
         if (!WeeklyMessage.HasScreenshot(message))
-            return null;
+            return [];
 
-        var picture = message.Attachments.FirstOrDefault(a => a.Filename.StartsWith(FilePrefix, StringComparison.Ordinal))
-                      ?? throw new InvalidOperationException("The Screenshot of the Week's picture is missing from the weekly.");
+        var pictures = Attached(message);
+        if (pictures.Count == 0)
+            throw new InvalidOperationException("The Screenshot of the Week's picture is missing from the weekly.");
 
-        return new WeeklyScreenshotFile(picture.Filename, await DownloadAsync(picture.Url, ct));
+        var files = new List<WeeklyScreenshotFile>();
+        foreach (var picture in pictures)
+            files.Add(new WeeklyScreenshotFile(picture.Filename, await DownloadAsync(picture.Url, ct)));
+
+        return files;
     }
 
-    private static async Task<WeeklyScreenshotFile> DownloadAsync(WeeklyScreenshotCandidate candidate, CancellationToken ct) =>
-        new(FilePrefix + Extension(candidate.Picture.Filename)[1..], await DownloadAsync(candidate.Picture.Url, ct));
+    /// <summary>The Screenshot of the Week's attachments on a preview or a posted weekly, in order.</summary>
+    public static List<IAttachment> Attached(IMessage message) =>
+        message.Attachments
+            .Select(a => (Attachment: a, Order: FileOrder(a.Filename)))
+            .Where(a => a.Order >= 0)
+            .OrderBy(a => a.Order)
+            .Select(a => a.Attachment)
+            .ToList();
+
+    private static List<WeeklyScreenshotCandidate> Ranked(IEnumerable<WeeklyScreenshotCandidate> candidates) =>
+        candidates
+            .OrderByDescending(c => c.Reactions)
+            .ThenBy(c => c.Post.Id)
+            .ThenBy(c => c.Index)
+            .ToList();
+
+    /// <summary>The bytes the pictures may take of one message's upload.</summary>
+    private static long Budget(ulong maxUpload) => Math.Max(0, (long)Math.Min(maxUpload, (ulong)long.MaxValue) - ReservedBytes);
+
+    /// <summary>The file name of the picture at <paramref name="order"/>: the first is named as it always was.</summary>
+    private static string FileName(int order, string extension) =>
+        (order == 0 ? FileStem : $"{FileStem}-{order + 1}") + extension;
+
+    /// <summary>0 for <c>screenshot.*</c>, 1 for <c>screenshot-2.*</c> and so on; -1 for any other file.</summary>
+    private static int FileOrder(string fileName)
+    {
+        if (!fileName.StartsWith(FileStem, StringComparison.Ordinal))
+            return -1;
+
+        var rest = fileName[FileStem.Length..];
+        if (rest.StartsWith('.'))
+            return 0;
+
+        return rest is ['-', >= '2' and <= '9', '.', ..] ? rest[1] - '1' : -1;
+    }
+
+    private static async Task<WeeklyScreenshotFile> DownloadAsync(WeeklyScreenshotCandidate candidate, int order, CancellationToken ct) =>
+        new(FileName(order, Extension(candidate.Picture.Filename)), await DownloadAsync(candidate.Picture.Url, ct));
 
     /// <summary>
     /// A picture from Discord's CDN. A timeout is an <see cref="HttpRequestException"/> here, not the

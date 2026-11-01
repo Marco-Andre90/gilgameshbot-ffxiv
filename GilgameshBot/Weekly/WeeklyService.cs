@@ -197,15 +197,15 @@ public sealed class WeeklyService
 
             // Picked here, or from the preview's menu: approving posts the picture the preview carries.
             var manual = WeeklyMessage.Manual(sections);
-            WeeklyScreenshotFile? screenshot = null;
+            List<WeeklyScreenshotFile> screenshots = [];
             List<WeeklyScreenshotCandidate> candidates = [];
-            if (target.Screenshots is { } screenshots)
+            if (target.Screenshots is { } screenshotChannel)
             {
-                candidates = await WeeklyScreenshot.CandidatesAsync(screenshots, DateTimeOffset.UtcNow.AddDays(-7), log, options);
-                if (await WeeklyScreenshot.PickAsync(candidates, log, ct) is { } pick)
+                candidates = await WeeklyScreenshot.CandidatesAsync(screenshotChannel, DateTimeOffset.UtcNow.AddDays(-7), log, options);
+                if (await WeeklyScreenshot.PickAsync(candidates, MaxUpload(target), log, ct) is { Count: > 0 } picks)
                 {
-                    manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
-                    screenshot = pick.File;
+                    manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(picks.Select(p => p.Candidate).ToList(), guildId));
+                    screenshots = picks.Select(p => p.File).ToList();
                 }
             }
 
@@ -219,7 +219,7 @@ public sealed class WeeklyService
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
                 warning = WeeklyMessage.EarlyWarning(last, lastIssue, now, discord: true);
 
-                var (embeds, files) = await BuildAsync(manual, screenshot, issue, now, ct);
+                var (embeds, files) = await BuildAsync(manual, screenshots, issue, now, ct);
                 // Exactly the FC leader, and nobody at all for a draft.
                 var allowed = draft ? AllowedMentions.None : new AllowedMentions { UserIds = [target.Leader.Id] };
 
@@ -436,7 +436,7 @@ public sealed class WeeklyService
     private async Task ChangeScreenshotAsync(SocketMessageComponent component, CancellationToken ct)
     {
         var options = new RequestOptions { CancelToken = ct };
-        var value = component.Data.Values?.FirstOrDefault() ?? WeeklyScreenshot.NoneValue;
+        var values = component.Data.Values ?? [];
         try
         {
             // Too late once it is being posted, posted or rejected.
@@ -459,13 +459,13 @@ public sealed class WeeklyService
             }
 
             var issue = WeeklyMessage.ReadIssue(fresh) ?? throw new InvalidOperationException("The preview has no issue footer.");
-            var pick = await WeeklyScreenshot.ChooseAsync(target.Screenshots, value, options, ct);
+            var picks = await WeeklyScreenshot.ChooseAsync(target.Screenshots, values, MaxUpload(target), options, ct);
 
             var manual = WeeklyMessage.WithoutScreenshot(WeeklyMessage.Manual(fresh));
-            if (pick is not null)
-                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(pick.Candidate, guildId));
+            if (picks.Count > 0)
+                manual = WeeklyMessage.WithScreenshot(manual, WeeklyMessage.Screenshot(picks.Select(p => p.Candidate).ToList(), guildId));
 
-            var (embeds, files) = await BuildAsync(manual, pick?.File, issue, DateTimeOffset.UtcNow, ct);
+            var (embeds, files) = await BuildAsync(manual, picks.Select(p => p.File).ToList(), issue, DateTimeOffset.UtcNow, ct);
             // Building took a few seconds: an Approve meanwhile wins, and its claim must not be overwritten.
             if (await FreshAsync(component, options) is not { } stillWaiting || HasStatus(stillWaiting))
                 return;
@@ -576,8 +576,8 @@ public sealed class WeeklyService
                 var (_, lastIssue) = await LastWeeklyAsync(target.Announcement, options);
                 var issue = new WeeklyIssue((lastIssue?.Number ?? 0) + 1, CalendarPage.LocalDay(now, await calendar.TimeZoneAsync(ct)));
                 // From the preview as it is now, claimed: its screenshot may have been changed since the click.
-                var screenshot = await WeeklyScreenshot.ReadBackAsync(settled, ct);
-                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(settled), screenshot, issue, now, ct);
+                var screenshots = await WeeklyScreenshot.ReadBackAsync(settled, ct);
+                var (embeds, files) = await BuildAsync(WeeklyMessage.Manual(settled), screenshots, issue, now, ct);
 
                 var webhook = await WebhookAsync(target.WebhookHome, create: true, options)
                               ?? throw new InvalidOperationException("The webhook could not be created.");
@@ -631,11 +631,15 @@ public sealed class WeeklyService
                 }
 
                 // A screenshot change that was under way when the claim landed: post what is shown, not what was.
-                if (WeeklyMessage.ScreenshotFileId(stillOurs) != WeeklyMessage.ScreenshotFileId(settled))
+                if (WeeklyMessage.ScreenshotFileIds(stillOurs) != WeeklyMessage.ScreenshotFileIds(settled))
                 {
                     await RestoreAsync(component, head, "the screenshot was changed while it was being posted", options);
                     return;
                 }
+
+                // Without it Discord still shows the mention, but may not notify anyone.
+                if (CalendarChannels.Permissions(client, target.Announcement) is not { MentionEveryone: true })
+                    log.Warning("The bot lacks Mention Everyone in #{Channel}: the weekly's @everyone may not notify anyone.", target.Announcement.Name);
 
                 ulong postedId;
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
@@ -645,9 +649,10 @@ public sealed class WeeklyService
                     using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     using var hook = new DiscordWebhookClient(webhook);
                     await CalendarChannels.ReopenAsync(target.Announcement, new RequestOptions { CancelToken = sendCts.Token });
-                    postedId = await hook.SendFilesAsync(attachments, text: null, embeds: embeds, username: WeeklyMessage.Name,
+                    // @everyone and nothing else: the officers' text has its mass mentions neutralised.
+                    postedId = await hook.SendFilesAsync(attachments, text: WeeklyMessage.PostedText, embeds: embeds, username: WeeklyMessage.Name,
                         avatarUrl: webhook.GetAvatarUrl(), options: new RequestOptions { CancelToken = sendCts.Token },
-                        allowedMentions: AllowedMentions.None, threadId: target.ThreadId);
+                        allowedMentions: new AllowedMentions(AllowedMentionTypes.Everyone), threadId: target.ThreadId);
                 }
                 finally
                 {
@@ -880,8 +885,8 @@ public sealed class WeeklyService
                     return;
 
                 // Every file is attached again, so the screenshot too.
-                var screenshot = await WeeklyScreenshot.ReadBackAsync(last, ct);
-                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), screenshot, issue, events, last.Timestamp, guildId);
+                var screenshots = await WeeklyScreenshot.ReadBackAsync(last, ct);
+                var (embeds, files) = WeeklyMessage.Assemble(WeeklyMessage.Manual(last), screenshots, issue, events, last.Timestamp, guildId);
                 var attachments = files.Select(f => new FileAttachment(new MemoryStream(f.Bytes), f.Name)).ToList();
                 try
                 {
@@ -923,12 +928,19 @@ public sealed class WeeklyService
 
     // --- Shared helpers -----------------------------------------------------------------------
 
+    /// <summary>
+    /// What one message may upload on the weekly's server. From the gateway's guild: a channel
+    /// read over REST (an archived thread) cannot return its guild.
+    /// </summary>
+    private ulong MaxUpload(WeeklyTarget target) =>
+        client.GetGuild(target.Approval.GuildId)?.MaxUploadLimit ?? 10 * 1024 * 1024;
+
     /// <summary>The message for <paramref name="issue"/>, with the events of the week from <paramref name="from"/>.</summary>
     private async Task<(Embed[] Embeds, List<(string Name, byte[] Bytes)> Files)> BuildAsync(
-        List<EmbedBuilder> manual, WeeklyScreenshotFile? screenshot, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
+        List<EmbedBuilder> manual, IReadOnlyList<WeeklyScreenshotFile> screenshots, WeeklyIssue issue, DateTimeOffset from, CancellationToken ct)
     {
         var events = await EventsAsync(ct);
-        return WeeklyMessage.Assemble(manual, screenshot, issue, events, from, guildId);
+        return WeeklyMessage.Assemble(manual, screenshots, issue, events, from, guildId);
     }
 
     /// <summary>The calendar's Apollo events; none when no Apollo channel is set. Throws <see cref="CalendarSourceException"/> on an unreadable one.</summary>
@@ -951,8 +963,9 @@ public sealed class WeeklyService
         foreach (var m in messages.OrderByDescending(m => m.Id))
         {
             // Previews come from the same webhook but carry text (who wrote it, its status); a posted
-            // weekly has none.
-            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name && string.IsNullOrEmpty(m.Content)
+            // weekly has only its @everyone, or none (posted before it had one).
+            if (m.Author.IsWebhook && m.Author.Username == WeeklyMessage.Name
+                && (string.IsNullOrEmpty(m.Content) || m.Content == WeeklyMessage.PostedText)
                 && WeeklyMessage.ReadIssue(m) is { } issue)
                 return (m, issue);
         }
